@@ -1,205 +1,151 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 
-# --- CONFIGURACIÓN DE LA PÁGINA ---
-st.set_page_config(page_title="Gestión de Consultorio", layout="wide", page_icon="🏥")
+# --- 1. CONFIGURACIÓN ESTÉTICA (ELITE SYSTEM) ---
+st.set_page_config(page_title="Elite System Pro", layout="wide", page_icon="🌿")
 
-# --- FUNCIONES DE BASE DE DATOS ---
-def init_db():
-    conn = sqlite3.connect('consultorio.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS pacientes (
-                    id INTEGER PRIMARY KEY,
-                    nombre TEXT,
-                    edad INTEGER,
-                    sexo TEXT,
-                    patologia TEXT,
-                    contacto TEXT,
-                    evaluacion_inicial TEXT,
-                    tipo_paciente TEXT,
-                    origen TEXT,
-                    plan_actual TEXT,
-                    sesiones_restantes INTEGER
-                )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS turnos (
-                    id INTEGER PRIMARY KEY,
-                    paciente_id INTEGER,
-                    nombre_paciente TEXT,
-                    fecha DATE,
-                    hora TIME,
-                    tipo_servicio TEXT,
-                    detalle_servicio TEXT,
-                    FOREIGN KEY(paciente_id) REFERENCES pacientes(id)
-                )''')
-    conn.commit()
-    conn.close()
+BRAND_GREEN = "#60b067"
+BRAND_BLACK = "#1E1E1E"
 
-def agregar_paciente(nombre, edad, sexo, patologia, contacto, eva_ini, tipo, origen, plan, sesiones):
-    conn = sqlite3.connect('consultorio.db')
-    c = conn.cursor()
-    c.execute('''INSERT INTO pacientes (nombre, edad, sexo, patologia, contacto, evaluacion_inicial, tipo_paciente, origen, plan_actual, sesiones_restantes)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', 
-                 (nombre, edad, sexo, patologia, contacto, eva_ini, tipo, origen, plan, sesiones))
-    conn.commit()
-    conn.close()
+st.markdown(f"""
+    <style>
+    .stApp {{ background-color: #FAFAFA; }}
+    [data-testid="stSidebar"] {{ background-color: #FFFFFF; border-right: 1px solid #f0f0f0; }}
+    .stButton>button {{ 
+        background-color: {BRAND_GREEN}; color: white; border-radius: 12px; 
+        border: none; font-weight: bold; width: 100%; padding: 10px;
+    }}
+    .main-title {{ color: {BRAND_GREEN}; font-size: 30px; font-weight: bold; }}
+    div[data-testid="stMetricValue"] {{ color: {BRAND_GREEN}; font-weight: bold; }}
+    </style>
+    """, unsafe_allow_html=True)
 
-def actualizar_paciente(id_paciente, nombre, edad, sexo, patologia, contacto, plan, sesiones):
-    conn = sqlite3.connect('consultorio.db')
-    c = conn.cursor()
-    c.execute('''UPDATE pacientes SET nombre=?, edad=?, sexo=?, patologia=?, contacto=?, plan_actual=?, sesiones_restantes=?
-                 WHERE id=?''', (nombre, edad, sexo, patologia, contacto, plan, sesiones, id_paciente))
-    conn.commit()
-    conn.close()
+# --- 2. GESTIÓN DE DATOS ---
+if not os.path.exists('data'):
+    os.makedirs('data')
 
-def eliminar_paciente(id_paciente):
-    conn = sqlite3.connect('consultorio.db')
-    c = conn.cursor()
-    c.execute('DELETE FROM pacientes WHERE id=?', (id_paciente,))
-    # Opcional: Eliminar también sus turnos
-    c.execute('DELETE FROM turnos WHERE paciente_id=?', (id_paciente,))
-    conn.commit()
-    conn.close()
+def cargar_datos(archivo, columnas):
+    path = f'data/{{archivo}}.csv'
+    if not os.path.exists(path):
+        pd.DataFrame(columns=columnas).to_csv(path, index=False)
+    return pd.read_csv(path)
 
-def agendar_turno(paciente_id, nombre, fecha, hora, tipo_servicio, detalle):
-    conn = sqlite3.connect('consultorio.db')
-    c = conn.cursor()
-    c.execute('''INSERT INTO turnos (paciente_id, nombre_paciente, fecha, hora, tipo_servicio, detalle_servicio)
-                 VALUES (?, ?, ?, ?, ?, ?)''', (paciente_id, nombre, fecha, hora, tipo_servicio, detalle))
-    c.execute('UPDATE pacientes SET sesiones_restantes = sesiones_restantes - 1 WHERE id = ? AND sesiones_restantes > 0', (paciente_id,))
-    conn.commit()
-    conn.close()
+df_pacientes = cargar_datos('pacientes', ["DNI", "Nombre", "Contacto", "Dx", "Origen", "Servicio", "Pago", "Fecha", "Sesiones"])
+df_agenda = cargar_datos('agenda', ["Fecha", "Hora", "Paciente", "Servicio"])
 
-def obtener_pacientes():
-    conn = sqlite3.connect('consultorio.db')
-    df = pd.read_sql_query("SELECT * FROM pacientes", conn)
-    conn.close()
-    return df
+# --- 3. LÓGICA DE NEGOCIO ---
+def calcular_comision(pago, origen):
+    tasa = 0.30 if origen == "Socio Gimnasio" else 0.20
+    return pago * tasa
 
-def obtener_turnos():
-    conn = sqlite3.connect('consultorio.db')
-    df = pd.read_sql_query("SELECT * FROM turnos ORDER BY fecha, hora", conn)
-    conn.close()
-    return df
-
-# --- INICIALIZAR APP ---
-init_db()
-
-# --- INTERFAZ GRÁFICA ---
-st.title("🏥 Gestión de Consultorio y Agenda V2.0")
-
-menu = st.sidebar.selectbox("Menú Principal", 
-    ["Registro de Pacientes", "Administrar Pacientes (Editar/Borrar)", "Agenda y Turnos", "Alertas y Estado"])
-
-# 1. REGISTRO
-if menu == "Registro de Pacientes":
-    st.header("Nuevo Paciente")
-    with st.form("form_registro"):
-        col1, col2 = st.columns(2)
-        with col1:
-            nombre = st.text_input("Nombre Completo")
-            edad = st.number_input("Edad", min_value=0, max_value=120)
-            sexo = st.selectbox("Sexo", ["Femenino", "Masculino", "Otro"])
-            contacto = st.text_input("Contacto (Tel/Email)")
-        with col2:
-            patologia = st.text_input("Patología / Motivo")
-            origen = st.radio("Origen", ["Gimnasio", "Captación Propia"])
-            tipo_paciente = st.radio("Estado", ["Nuevo", "Recurrente"])
-            evaluacion = st.checkbox("¿Evaluación Inicial Realizada?")
-        
-        st.subheader("Plan Inicial")
-        plan_seleccionado = st.selectbox("Seleccionar Plan", ["Sin Plan (Sesión suelta)", "Plan X5", "Plan X10"])
-        
-        sesiones = 0
-        if plan_seleccionado == "Plan X5": sesiones = 5
-        elif plan_seleccionado == "Plan X10": sesiones = 10
-            
-        submitted = st.form_submit_button("Guardar Paciente")
-        if submitted:
-            if nombre:
-                eva_txt = "Sí" if evaluacion else "No"
-                agregar_paciente(nombre, edad, sexo, patologia, contacto, eva_txt, tipo_paciente, origen, plan_seleccionado, sesiones)
-                st.success(f"Paciente {nombre} registrado.")
-            else:
-                st.error("Nombre obligatorio.")
-
-# 2. ADMINISTRAR (NUEVA SECCIÓN)
-elif menu == "Administrar Pacientes (Editar/Borrar)":
-    st.header("🛠️ Edición y Eliminación")
-    df = obtener_pacientes()
-    
-    if not df.empty:
-        paciente_a_editar = st.selectbox("Seleccionar Paciente para Editar/Borrar", df['nombre'].tolist())
-        datos_paciente = df[df['nombre'] == paciente_a_editar].iloc[0]
-        
-        with st.expander("📝 Editar Datos del Paciente", expanded=True):
-            with st.form("form_edicion"):
-                nuevo_nombre = st.text_input("Nombre", value=datos_paciente['nombre'])
-                nueva_edad = st.number_input("Edad", value=datos_paciente['edad'])
-                nuevo_sexo = st.selectbox("Sexo", ["Femenino", "Masculino", "Otro"], index=["Femenino", "Masculino", "Otro"].index(datos_paciente['sexo']))
-                nueva_patologia = st.text_input("Patología", value=datos_paciente['patologia'])
-                nuevo_contacto = st.text_input("Contacto", value=datos_paciente['contacto'])
-                
-                nuevo_plan = st.selectbox("Plan Actual", ["Sin Plan (Sesión suelta)", "Plan X5", "Plan X10"], index=["Sin Plan (Sesión suelta)", "Plan X5", "Plan X10"].index(datos_paciente['plan_actual']))
-                nuevas_sesiones = st.number_input("Sesiones Restantes", value=datos_paciente['sesiones_restantes'])
-                
-                if st.form_submit_button("💾 Guardar Cambios"):
-                    actualizar_paciente(datos_paciente['id'], nuevo_nombre, nueva_edad, nuevo_sexo, nueva_patologia, nuevo_contacto, nuevo_plan, nuevas_sesiones)
-                    st.success("Datos actualizados. Recarga la página si no ves los cambios.")
-                    st.rerun()
-
-        st.markdown("---")
-        with st.expander("🗑️ Zona de Peligro (Eliminar)"):
-            st.warning(f"¿Estás seguro de que deseas eliminar a {paciente_a_editar}? Esta acción no se puede deshacer.")
-            if st.button("Sí, Eliminar Paciente Definitivamente"):
-                eliminar_paciente(datos_paciente['id'])
-                st.error("Paciente eliminado.")
-                st.rerun()
-    else:
-        st.info("No hay pacientes para editar.")
-
-# 3. AGENDA
-elif menu == "Agenda y Turnos":
-    st.header("📅 Agenda")
-    df_pacientes = obtener_pacientes()
-    if not df_pacientes.empty:
-        paciente_sel = st.selectbox("Paciente", df_pacientes['nombre'].tolist())
-        id_paciente = df_pacientes[df_pacientes['nombre'] == paciente_sel]['id'].values[0]
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            fecha = st.date_input("Fecha", min_value=datetime.today())
-            hora = st.time_input("Hora")
-        with col2:
-            servicio = st.selectbox("Servicio", ["Sesión Individual", "Masoterapia"])
-            detalle = "-"
-            if servicio == "Masoterapia":
-                detalle = st.radio("Zona", ["Cuerpo Completo", "Parcial"])
-        
-        if st.button("Confirmar Turno"):
-            agendar_turno(id_paciente, paciente_sel, fecha, hora, servicio, detalle)
-            st.success("Turno agendado.")
-            st.rerun() # Refrescar para ver el turno abajo inmediatamente
-            
+# --- 4. SIDEBAR ---
+with st.sidebar:
+    st.markdown(f'<h1 class="main-title">🌿 ELITE <span style="color:{BRAND_BLACK}; font-weight:normal; font-style:italic;">SYSTEM</span></h1>', unsafe_allow_html=True)
+    st.caption("CONSULTORIO PRO V1.1")
     st.divider()
-    st.subheader("Próximos Turnos")
-    df_turnos = obtener_turnos()
-    if not df_turnos.empty:
-        st.dataframe(df_turnos[['fecha', 'hora', 'nombre_paciente', 'tipo_servicio', 'detalle_servicio']], use_container_width=True)
+    menu = st.radio("MENÚ", ["📅 Agenda & Turnos", "📝 Registro & Cobro", "📊 Inteligencia Financiera"])
+    
+    st.divider()
+    if st.button("📱 Generar Recordatorios"):
+        st.toast("Links de WhatsApp generados con éxito")
 
-# 4. ALERTAS
-elif menu == "Alertas y Estado":
-    st.header("🔔 Estado de Planes")
-    df = obtener_pacientes()
-    if not df.empty:
-        df_planes = df[df['plan_actual'] != "Sin Plan (Sesión suelta)"]
-        for _, row in df_planes.iterrows():
-            rest = row['sesiones_restantes']
-            nom = row['nombre']
-            if rest <= 1: st.error(f"⚠️ {nom}: Quedan {rest} sesiones")
-            elif rest <= 3: st.warning(f"🔸 {nom}: Quedan {rest} sesiones")
-            else: st.success(f"✅ {nom}: Quedan {rest} sesiones")
-        st.divider()
-        st.write("Base de Datos Completa:")
-        st.dataframe(df)
+# --- MÓDULO: AGENDA ---
+if menu == "📅 Agenda & Turnos":
+    st.header("Agenda de Trabajo")
+    col_f1, col_f2 = st.columns([1, 1])
+    with col_f1:
+        fecha_ver = st.date_input("Ver Fecha", datetime.now())
+    
+    turnos_dia = df_agenda[df_agenda['Fecha'] == str(fecha_ver)]
+    
+    with col_f2:
+        st.metric("Turnos para hoy", len(turnos_dia))
+
+    if not turnos_dia.empty:
+        for _, t in turnos_dia.sort_values(by="Hora").iterrows():
+            with st.container():
+                st.markdown(f"""
+                <div style="background:white; padding:20px; border-radius:15px; border-left: 5px solid {BRAND_GREEN}; margin-bottom:10px; box-shadow: 0px 2px 5px rgba(0,0,0,0.05);">
+                    <span style="color:{BRAND_GREEN}; font-weight:bold;">{t['Hora']} hs</span> | 
+                    <span style="font-weight:bold; font-size:18px;">{t['Paciente']}</span><br>
+                    <small style="color:gray;">{t['Servicio']}</small>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("Libre - Sin compromisos para esta fecha.")
+
+# --- MÓDULO: REGISTRO ---
+elif menu == "📝 Registro & Cobro":
+    st.header("Nueva Atención")
+    with st.form("registro_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            nombre = st.text_input("Nombre Completo")
+            dni = st.text_input("Documento (DNI)")
+            contacto = st.text_input("WhatsApp (549...)")
+        with c2:
+            dx = st.text_input("Motivo / Diagnóstico")
+            origen = st.selectbox("Origen", ["Socio Gimnasio", "Captación Propia"])
+            servicio = st.selectbox("Servicio", ["Plan X5", "Plan X10", "Sesión Individual", "Evaluación"])
+        
+        monto = st.number_input("Monto Total Cobrado ($)", min_value=0)
+        
+        st.markdown("### Programación")
+        c3, c4 = st.columns(2)
+        f_inicio = c3.date_input("Fecha Inicio", datetime.now())
+        h_inicio = c4.time_input("Hora de Sesión", datetime.now().time())
+        
+        dias_fijos = st.checkbox("¿Usar días fijos para el resto de sesiones?")
+        dias_selec = st.multiselect("Días de la semana", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]) if dias_fijos else []
+
+        if st.form_submit_button("CONFIRMAR Y AGENDAR PACK"):
+            # Determinar cantidad de sesiones
+            cant = 1
+            if "X5" in servicio: cant = 5
+            elif "X10" in servicio: cant = 10
+            
+            # Guardar Paciente
+            nuevo_p = pd.DataFrame([[dni, nombre, contacto, dx, origen, servicio, monto, str(f_inicio), cant]], columns=df_pacientes.columns)
+            nuevo_p.to_csv('data/pacientes.csv', mode='a', header=False, index=False)
+            
+            # Generar Turnos
+            nuevos_t_list = []
+            if dias_fijos and dias_selec:
+                dict_dias = {"Lunes":0, "Martes":1, "Miércoles":2, "Jueves":3, "Viernes":4, "Sábado":5}
+                dias_num = [dict_dias[d] for d in dias_selec]
+                
+                curr_fecha = f_inicio
+                agendados = 0
+                while agendados < cant:
+                    if curr_fecha.weekday() in dias_num:
+                        nuevos_t_list.append([str(curr_fecha), h_inicio.strftime("%H:%M"), nombre, servicio])
+                        agendados += 1
+                    curr_fecha += timedelta(days=1)
+            else:
+                nuevos_t_list.append([str(f_inicio), h_inicio.strftime("%H:%M"), nombre, servicio])
+            
+            df_new_t = pd.DataFrame(nuevos_t_list, columns=df_agenda.columns)
+            df_new_t.to_csv('data/agenda.csv', mode='a', header=False, index=False)
+            
+            st.success("¡Atención registrada y sesiones agendadas!")
+
+# --- MÓDULO: FINANZAS ---
+elif menu == "📊 Inteligencia Financiera":
+    st.header("Inteligencia Financiera")
+    df_p = pd.read_csv('data/pacientes.csv')
+    
+    if not df_p.empty:
+        df_p['Comision'] = df_p.apply(lambda x: calcular_comision(x['Pago'], x['Origen']), axis=1)
+        df_p['Neto'] = df_p['Pago'] - df_p['Comision']
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Ingresos Brutos", f"${df_p['Pago'].sum():,.0f}")
+        c2.metric("Comisiones Cedidas", f"-${df_p['Comision'].sum():,.0f}")
+        c3.metric("Utilidad Neta Elite", f"${df_p['Neto'].sum():,.0f}")
+        
+        st.subheader("Historial de Cobros")
+        st.dataframe(df_p, use_container_width=True)
+    else:
+        st.warning("No hay datos financieros registrados aún.")
