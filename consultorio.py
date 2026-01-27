@@ -3,11 +3,11 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 import plotly.express as px
+import urllib.parse
 
-# --- 1. CONFIGURACIÓN, MATRIZ DE PRECIOS Y ESTILO ---
-st.set_page_config(page_title="Elite System Ultra V12 Gold", layout="wide", page_icon="🌿")
+# --- 1. CONFIGURACIÓN Y MATRIZ DE PRECIOS ---
+st.set_page_config(page_title="Elite System V13 Quantum", layout="wide", page_icon="🌿")
 
-# Matriz de costos predeterminados
 PRECIOS_BASE = {
     "Evaluacion": 36000,
     "Sesion Especializada": 36000,
@@ -20,197 +20,182 @@ PRECIOS_BASE = {
 }
 
 BRAND_GREEN = "#60b067"
-LIGHT_GREEN = "#90ee90"
 NEON_GREEN = "#39FF14"
-WARNING_GOLD = "#ffcc00"
 
 st.markdown(f"""
     <style>
     .stApp {{ background-color: #FFFFFF; color: #1E1E1E; }}
-    .main-title {{ color: {BRAND_GREEN}; font-size: 32px; font-weight: bold; }}
-    
-    /* Tarjeta Esmerilada V12 */
+    [data-testid="stSidebar"] {{ background-color: #f8f9fa; border-right: 1px solid #eee; }}
     .turno-card {{
         background: rgba(30, 30, 30, 0.95);
         backdrop-filter: blur(15px);
         border-left: 8px solid {BRAND_GREEN};
-        padding: 25px;
-        border-radius: 20px;
-        margin-bottom: 5px;
-        color: white;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        box-shadow: 0px 10px 30px rgba(0,0,0,0.3);
+        padding: 20px; border-radius: 15px; margin-bottom: 10px; color: white;
+        display: flex; justify-content: space-between; align-items: center;
     }}
-    
-    /* Sub-Panel Desplegable */
     .sub-panel {{
-        background: rgba(45, 45, 45, 0.05);
-        border-radius: 0 0 20px 20px;
-        padding: 20px;
-        margin-top: -10px;
-        margin-bottom: 20px;
-        border: 1px solid rgba(0,0,0,0.1);
-        border-top: none;
+        background: #f0f2f6; padding: 20px; border-radius: 0 0 15px 15px;
+        margin-top: -10px; margin-bottom: 20px; border: 1px solid #ddd;
     }}
-
-    /* Estilo Botones Integrados */
-    div.stButton > button {{
-        border-radius: 12px !important;
-        font-weight: bold !important;
-        height: 40px !important;
-        width: 100% !important;
-    }}
-    
-    .chip-libre {{
-        background: rgba(96, 176, 103, 0.1);
-        color: {BRAND_GREEN};
-        padding: 8px;
-        border-radius: 10px;
-        border: 1px solid {BRAND_GREEN};
-        font-weight: bold;
-        text-align: center;
-        margin-bottom: 5px;
+    .metric-box {{
+        background: white; padding: 15px; border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.05); border: 1px solid #eee;
     }}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN Y FUNCIONES AUXILIARES ---
+# --- 2. CONEXIÓN Y DATOS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def cargar_nube(pestana):
-    try: return conn.read(worksheet=pestana, ttl="0").dropna(how='all')
-    except: return pd.DataFrame()
+def cargar_datos():
+    df_p = conn.read(worksheet="pacientes", ttl="0").dropna(how='all')
+    df_a = conn.read(worksheet="agenda", ttl="0").dropna(how='all')
+    return df_p, df_a
 
-def obtener_disponibilidad(df_agenda, fecha):
-    horas_laborales = ["08:00", "09:00", "10:00", "11:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00"]
-    if df_agenda.empty: return horas_laborales
-    ocupados = df_agenda[df_agenda['Fecha'].astype(str) == str(fecha)]['Hora'].tolist()
-    return [h for h in horas_laborales if h not in ocupados]
+def guardar_datos(df, hoja):
+    conn.update(worksheet=hoja, data=df)
+    st.cache_data.clear()
 
-def calcular_pago(servicio, origen, es_primera_ev):
-    if "Masaje" in servicio:
-        tipo = "Socio" if origen == "Socio Gimnasio" else "Gral"
-        return PRECIOS_BASE[servicio][tipo]
-    precio = PRECIOS_BASE.get(servicio, 0)
-    if servicio == "Evaluacion" and es_primera_ev:
-        return 0 if origen == "Socio Gimnasio" else precio * 0.5
-    return precio
+# --- 3. LÓGICA PREDICTIVA Y AUXILIAR ---
+def calcular_fechas(f_ini, dias_semana, cant):
+    dias_map = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4}
+    nums_objetivo = [dias_map[d] for d in dias_semana]
+    fechas = []
+    actual = f_ini
+    while len(fechas) < cant:
+        if actual.weekday() in nums_objetivo:
+            fechas.append(actual.strftime("%Y-%m-%d"))
+        actual += timedelta(days=1)
+    return fechas
 
-# --- 3. NAVEGACIÓN ---
+# --- 4. NAVEGACIÓN ---
+df_p, df_a = cargar_datos()
+
 with st.sidebar:
     st.markdown(f'<h1 style="color:{BRAND_GREEN};">🌿 ELITE SYSTEM</h1>', unsafe_allow_html=True)
-    menu = st.radio("MENÚ", ["📅 Agenda & Turnos", "📝 Registro & Cobro", "📊 Inteligencia Financiera"])
+    menu = st.radio("MENÚ DE GESTIÓN", ["📅 Agenda & Turnos", "📝 Registro & Cobro", "📊 Inteligencia & Análisis"])
 
-# --- MÓDULO 1: AGENDA & TURNOS (RESTAURADO) ---
+# --- MÓDULO 1: AGENDA & TURNOS ---
 if menu == "📅 Agenda & Turnos":
-    st.markdown('<p class="main-title">Agenda & Control de Sesiones</p>', unsafe_allow_html=True)
-    df_a = cargar_nube("agenda")
-    df_p = cargar_nube("pacientes")
-    hoy = datetime.now().date()
-
-    # FUNCIONALIDAD 1: EXPANDIR DISPONIBILIDAD (RESTAURADO)
-    with st.expander("🔍 CONSULTAR TURNOS DISPONIBLES", expanded=False):
-        c_f, _ = st.columns([1, 2])
-        f_sel = c_f.date_input("Día a consultar:", hoy)
-        libres = obtener_disponibilidad(df_a, f_sel)
-        if libres:
-            cols = st.columns(5)
-            for i, h in enumerate(libres):
-                cols[i % 5].markdown(f'<div class="chip-libre">{h}</div>', unsafe_allow_html=True)
-        else: st.warning("Sin disponibilidad.")
+    st.markdown('<p class="main-title">Control de Agenda Inteligente</p>', unsafe_allow_html=True)
+    
+    with st.expander("🔍 DISPONIBILIDAD DE HUECOS"):
+        f_busq = st.date_input("Consultar fecha:", datetime.now())
+        ocupados = df_a[df_a['Fecha'].astype(str) == str(f_busq)]['Hora'].tolist()
+        libres = [h for h in ["08:00", "09:00", "10:00", "11:00", "14:00", "15:00", "16:00", "17:00", "18:00"] if h not in ocupados]
+        cols = st.columns(len(libres) if libres else 1)
+        for i, h in enumerate(libres): cols[i].button(h, key=f"h_{h}")
 
     st.divider()
+    hoy_str = datetime.now().strftime("%Y-%m-%d")
+    turnos_hoy = df_a[df_a['Fecha'].astype(str) == hoy_str].sort_values("Hora")
 
-    t_hoy = df_a[df_a['Fecha'].astype(str) == str(hoy)].sort_values("Hora")
-    if t_hoy.empty:
-        st.info("No hay turnos para hoy.")
+    if turnos_hoy.empty:
+        st.info("No hay pacientes agendados para hoy.")
     else:
-        for _, t in t_hoy.iterrows():
-            rest = 10
-            if not df_p.empty:
-                p_match = df_p[df_p['Nombre'] == t['Paciente']]
-                if not p_match.empty:
-                    rest = pd.to_numeric(p_match['Sesiones_Restantes'].iloc[-1], errors='coerce')
-
-            # Tarjeta Esmerilada
+        for _, t in turnos_hoy.iterrows():
+            # Buscar info del paciente para análisis
+            p_info = df_p[df_p['Nombre'] == t['Paciente']].iloc[-1] if not df_p[df_p['Nombre'] == t['Paciente']].empty else None
+            sesiones_r = int(p_info['Sesiones_Restantes']) if p_info is not None else 0
+            
             st.markdown(f"""
             <div class="turno-card">
                 <div>
-                    <span style="color:{BRAND_GREEN}; font-size:24px; font-weight:bold;">{t['Hora']} hs</span><br>
-                    <span style="font-size:20px;">{t['Paciente']}</span><br>
-                    <small style="color:{NEON_GREEN if rest <= 2 else 'white'};">Sesiones restantes: {rest}</small>
+                    <span style="font-size:22px; font-weight:bold; color:{BRAND_GREEN};">{t['Hora']} hs</span> | {t['Paciente']}<br>
+                    <small>{t['Servicio']} | <b>Restan: {sesiones_r}</b></small>
                 </div>
             </div>
             """, unsafe_allow_html=True)
             
-            # Botones con Sub-paneles
-            c1, c2, _ = st.columns([1, 1, 2])
-            with c1: renovar = st.button("🛒 Renovar", key=f"r_{t['Hora']}")
-            with c2: reagendar = st.button("⚙️ Reagendar", key=f"m_{t['Hora']}")
+            c1, c2, c3 = st.columns([1, 1, 1])
+            if c1.button("🛒 Renovar", key=f"ren_{t['Hora']}"):
+                st.session_state.accion = ("renovar", t['Paciente'])
+            if c2.button("⚙️ Reagendar", key=f"mod_{t['Hora']}"):
+                st.session_state.accion = ("reagendar", t['Paciente'])
             
-            if renovar:
-                st.markdown('<div class="sub-panel">', unsafe_allow_html=True)
-                st.write(f"### Renovación: {t['Paciente']}")
-                st.selectbox("Nuevo Plan:", ["Plan x5", "Plan x10"], key=f"s_{t['Hora']}")
-                st.button("Confirmar y Cobrar", key=f"c_{t['Hora']}")
-                st.markdown('</div>', unsafe_allow_html=True)
-            
-            if reagendar:
-                st.markdown('<div class="sub-panel">', unsafe_allow_html=True)
-                st.write("### Cambio de Horario")
-                st.time_input("Nuevo horario:", key=f"t_{t['Hora']}")
-                st.button("Actualizar Agenda", key=f"u_{t['Hora']}")
-                st.markdown('</div>', unsafe_allow_html=True)
+            # WhatsApp Directo
+            msg = urllib.parse.quote(f"Hola {t['Paciente']}, te escribo de Elite System para coordinar tu turno...")
+            c3.markdown(f'''<a href="https://wa.me/{p_info['Contacto'] if p_info is not None else ''}?text={msg}" target="_blank">
+                <button style="width:100%; border-radius:12px; height:40px; background:#25D366; color:white; border:none; cursor:pointer;">📱 WhatsApp</button></a>''', unsafe_allow_html=True)
 
-# --- MÓDULO 2: REGISTRO & COBRO (FUNCIONALIDAD COMPLETA RESTAURADA) ---
+# --- MÓDULO 2: REGISTRO & COBRO (MOTOR DE PERSISTENCIA V13) ---
 elif menu == "📝 Registro & Cobro":
-    st.markdown('<p class="main-title">Nuevo Registro Elite</p>', unsafe_allow_html=True)
-    df_p = cargar_nube("pacientes")
+    st.markdown('<p class="main-title">Registro & Venta Automática</p>', unsafe_allow_html=True)
     
-    with st.form("registro_v12"):
-        st.subheader("Datos del Paciente")
-        c1, c2, c3 = st.columns(3)
-        nombre = c1.text_input("Nombre Completo")
-        dni = c2.text_input("DNI")
-        whatsapp = c3.text_input("WhatsApp (ej. 549341...)")
-        
-        dx = st.text_area("Diagnóstico (Dx)")
+    with st.form("form_quantum"):
+        c1, c2 = st.columns(2)
+        with c1:
+            nombre = st.text_input("Nombre Completo")
+            dni = st.text_input("DNI")
+            whatsapp = st.text_input("WhatsApp (ej: 549...)")
+            dx = st.text_area("Diagnóstico")
+        with c2:
+            origen = st.selectbox("Origen", ["Socio Gimnasio", "Captación Propia"])
+            servicio = st.selectbox("Servicio / Plan", list(PRECIOS_BASE.keys()))
+            
+            # Lógica de Precios Predictiva
+            ya_fue_evaluado = not df_p[(df_p['DNI'].astype(str) == str(dni)) & (df_p['Servicio'] == "Evaluacion")].empty
+            monto = 0
+            if "Masaje" in servicio:
+                monto = PRECIOS_BASE[servicio]["Socio" if origen == "Socio Gimnasio" else "Gral"]
+            else:
+                monto = PRECIOS_BASE[servicio]
+                if servicio == "Evaluacion" and not ya_fue_evaluado:
+                    monto = 0 if origen == "Socio Gimnasio" else monto * 0.5
+            
+            st.metric("Total a Cobrar", f"${monto:,.0f}")
         
         st.divider()
-        st.subheader("Servicio y Facturación")
-        c4, c5, c6 = st.columns(3)
-        origen = c4.selectbox("Origen", ["Socio Gimnasio", "Captación Propia"])
-        serv = c5.selectbox("Servicio / Plan", list(PRECIOS_BASE.keys()))
-        
-        # Inteligencia de Precios Automatizada
-        es_primera_ev = True
-        if not df_p.empty and dni:
-            es_primera_ev = df_p[(df_p['DNI'].astype(str) == str(dni)) & (df_p['Servicio'] == "Evaluacion")].empty
-        
-        monto_final = calcular_pago(serv, origen, es_primera_ev)
-        c6.write("### Total a Cobrar:")
-        c6.write(f"## ${monto_final:,.0f}")
-        
-        st.divider()
-        st.subheader("Configuración de Agenda")
-        c7, c8 = st.columns(2)
-        f_ini = c7.date_input("Fecha de Inicio", datetime.now())
-        h_ini = c8.time_input("Hora del turno", datetime.now().time())
-        dias = st.multiselect("Días fijos (solo para Planes)", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"])
+        c3, c4 = st.columns(2)
+        f_ini = c3.date_input("Fecha Inicio", datetime.now())
+        h_ini = c4.time_input("Hora", datetime.now().time())
+        dias = st.multiselect("Días para Planes", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"])
         
         if st.form_submit_button("CONSOLIDAR REGISTRO"):
-            # Lógica de guardado...
-            st.success("Registro procesado exitosamente.")
+            cant = 10 if "x10" in servicio else (5 if "x5" in servicio else 1)
+            fechas_plan = calcular_fechas(f_ini, dias, cant) if dias else [f_ini.strftime("%Y-%m-%d")]
+            
+            # 1. Actualizar Pacientes
+            nuevo_p = pd.DataFrame([[dni, nombre, whatsapp, dx, origen, servicio, monto, f_ini.strftime("%Y-%m-%d"), cant, cant]], 
+                                 columns=df_p.columns)
+            guardar_datos(pd.concat([df_p, nuevo_p], ignore_index=True), "pacientes")
+            
+            # 2. Actualizar Agenda
+            nuevos_t = pd.DataFrame([[f, h_ini.strftime("%H:%M"), nombre, servicio, "PENDIENTE", whatsapp] for f in fechas_plan], 
+                                   columns=df_a.columns)
+            guardar_datos(pd.concat([df_a, nuevos_t], ignore_index=True), "agenda")
+            
+            st.success("✅ Registro y Agenda sincronizados con éxito.")
             st.rerun()
 
-# --- MÓDULO 3: FINANZAS ---
-elif menu == "📊 Inteligencia Financiera":
-    st.markdown('<p class="main-title">Inteligencia Financiera</p>', unsafe_allow_html=True)
-    df_f = cargar_nube("pacientes")
-    if not df_f.empty:
-        df_f['Pago'] = pd.to_numeric(df_f['Pago'], errors='coerce').fillna(0)
-        st.metric("Ingresos Totales", f"${df_f['Pago'].sum():,.0f}")
-        fig = px.bar(df_f.groupby('Servicio')['Pago'].sum().reset_index(), x='Servicio', y='Pago', color='Pago', color_continuous_scale='Greens')
-        st.plotly_chart(fig, use_container_width=True)
+# --- MÓDULO 3: INTELIGENCIA & ANÁLISIS (EL SALTO CUÁNTICO) ---
+elif menu == "📊 Inteligencia & Análisis":
+    st.markdown('<p class="main-title">Análisis de Impacto & Salud del Negocio</p>', unsafe_allow_html=True)
+    
+    # KPIs Rápidos
+    c1, c2, c3 = st.columns(3)
+    ingresos_brutos = pd.to_numeric(df_p['Pago'], errors='coerce').sum()
+    c1.metric("Ingresos Totales", f"${ingresos_brutos:,.0f}")
+    
+    pacientes_criticos = df_p[pd.to_numeric(df_p['Sesiones_Restantes'], errors='coerce') <= 2].shape[0]
+    c2.metric("Pacientes por Renovar", pacientes_criticos, delta="- Alerta", delta_color="inverse")
+    
+    # Análisis Predictivo: ¿Cuánto dinero hay "en la mesa"?
+    # Calculamos el valor promedio de sesión por los planes activos
+    df_p['Sesiones_Restantes'] = pd.to_numeric(df_p['Sesiones_Restantes'], errors='coerce')
+    ingreso_asegurado = (df_p['Pago'] / df_p['Sesiones_Totales'] * df_p['Sesiones_Restantes']).sum()
+    c3.metric("Capital en Sesiones Pendientes", f"${ingreso_asegurado:,.0f}", help="Valor monetario de las sesiones que ya cobraste pero aún debes brindar.")
+
+    st.divider()
+    
+    col_izq, col_der = st.columns(2)
+    with col_izq:
+        st.subheader("Distribución de Ingresos")
+        fig_pie = px.pie(df_p, values='Pago', names='Servicio', hole=0.4, color_discrete_sequence=px.colors.sequential.Greens_r)
+        st.plotly_chart(fig_pie, use_container_width=True)
+    
+    with col_der:
+        st.subheader("Estado de Retención de Pacientes")
+        fig_bar = px.bar(df_p, x='Nombre', y='Sesiones_Restantes', color='Sesiones_Restantes', 
+                         color_continuous_scale='RdYlGn', title="Sesiones Restantes por Paciente")
+        st.plotly_chart(fig_bar, use_container_width=True)
