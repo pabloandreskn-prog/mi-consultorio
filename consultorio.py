@@ -4,80 +4,69 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 import plotly.express as px
 
-# --- 1. CONFIGURACIÓN Y ESTILO ---
-st.set_page_config(page_title="Elite System Ultra V10", layout="wide", page_icon="🌿")
+# --- 1. CONFIGURACIÓN, MATRIZ DE PRECIOS Y ESTILO ---
+st.set_page_config(page_title="Elite System Ultra V11", layout="wide", page_icon="🌿")
+
+PRECIOS_BASE = {
+    "Evaluacion": 36000,
+    "Sesion Especializada": 36000,
+    "Sesion Individual": 24000,
+    "Plan x5": 110000,
+    "Plan x10": 200000,
+    "Masaje ZA (piernas y pies)": {"Socio": 25000, "Gral": 30000},
+    "Masaje ZB (Espalda y Cabeza)": {"Socio": 25000, "Gral": 30000},
+    "Masaje Completo": {"Socio": 38000, "Gral": 45000}
+}
 
 BRAND_GREEN = "#60b067"
-LIGHT_GREEN = "#90ee90"
-WARNING_GOLD = "#ffcc00"
+NEON_GREEN = "#39FF14"
 
 st.markdown(f"""
     <style>
-    /* Fondo General Blanco */
     .stApp {{ background-color: #FFFFFF; color: #1E1E1E; }}
+    .main-title {{ color: {BRAND_GREEN}; font-size: 32px; font-weight: bold; }}
     
-    .main-title {{ color: {BRAND_GREEN}; font-size: 32px; font-weight: bold; margin-bottom: 20px; }}
-    
-    /* Tarjetas Esmeriladas con Botones Integrados */
+    /* Tarjeta Esmerilada V11 */
     .turno-card {{
-        background: rgba(30, 30, 30, 0.9);
-        backdrop-filter: blur(10px);
-        border-left: 6px solid {BRAND_GREEN};
-        padding: 20px;
-        border-radius: 15px;
-        margin-bottom: 15px;
+        background: rgba(30, 30, 30, 0.95);
+        backdrop-filter: blur(15px);
+        border-left: 8px solid {BRAND_GREEN};
+        padding: 25px;
+        border-radius: 20px;
+        margin-bottom: 5px;
         color: white;
-        box-shadow: 0px 4px 15px rgba(0,0,0,0.15);
         display: flex;
         justify-content: space-between;
         align-items: center;
+        box-shadow: 0px 10px 30px rgba(0,0,0,0.3);
     }}
     
-    .card-info {{ flex-grow: 1; }}
-    
-    .card-actions {{
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-        min-width: 140px;
+    /* Área de Trabajo Desplegable */
+    .sub-panel {{
+        background: rgba(45, 45, 45, 0.5);
+        border-radius: 0 0 20px 20px;
+        padding: 20px;
+        margin-top: -10px;
+        margin-bottom: 20px;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-top: none;
     }}
 
-    /* Estilo de Alertas Internas */
-    .alerta-badge {{
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-weight: bold;
-        font-size: 11px;
-        display: inline-block;
-        margin-top: 8px;
-    }}
-    .penultima {{ background-color: {WARNING_GOLD}; color: #333; }}
-    .ultima {{ background-color: {LIGHT_GREEN}; color: #1a5c1a; }}
-
-    /* Sobreescribir Botones de Streamlit para que parezcan integrados */
+    /* Botones Pro */
     div.stButton > button {{
-        width: 100%;
-        background-color: rgba(255,255,255,0.1) !important;
-        color: white !important;
-        border: 1px solid rgba(255,255,255,0.3) !important;
-        border-radius: 8px !important;
-        font-size: 12px !important;
-        transition: 0.3s;
+        border-radius: 12px !important;
+        font-weight: bold !important;
+        transition: 0.4s !important;
+        height: 45px !important;
     }}
-    div.stButton > button:hover {{
-        background-color: {BRAND_GREEN} !important;
-        border-color: {BRAND_GREEN} !important;
+    .btn-renovar > div.stButton > button {{
+        background-color: transparent !important;
+        color: {NEON_GREEN} !important;
+        border: 2px solid {NEON_GREEN} !important;
     }}
-    
-    .chip-libre {{
-        background: rgba(96, 176, 103, 0.1);
-        color: {BRAND_GREEN};
-        padding: 8px;
-        border-radius: 10px;
-        border: 1px solid {BRAND_GREEN};
-        font-weight: bold;
-        text-align: center;
-        margin-bottom: 5px;
+    .btn-renovar > div.stButton > button:hover {{
+        background-color: {NEON_GREEN} !important;
+        color: black !important;
     }}
     </style>
     """, unsafe_allow_html=True)
@@ -86,40 +75,31 @@ st.markdown(f"""
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def cargar_nube(pestana):
-    try:
-        return conn.read(worksheet=pestana, ttl="0").dropna(how='all')
-    except:
-        return pd.DataFrame()
+    try: return conn.read(worksheet=pestana, ttl="0").dropna(how='all')
+    except: return pd.DataFrame()
 
-# --- 3. LÓGICA DE TURNOS ---
-def obtener_disponibilidad(df_agenda, fecha):
-    horas_laborales = ["08:00", "09:00", "10:00", "11:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00"]
-    if df_agenda.empty: return horas_laborales
-    ocupados = df_agenda[df_agenda['Fecha'].astype(str) == str(fecha)]['Hora'].tolist()
-    return [h for h in horas_laborales if h not in ocupados]
+# --- 3. LÓGICA DE NEGOCIO ---
+def calcular_pago(servicio, origen, es_primera_ev):
+    if "Masaje" in servicio:
+        tipo = "Socio" if origen == "Socio Gimnasio" else "Gral"
+        return PRECIOS_BASE[servicio][tipo]
+    
+    precio = PRECIOS_BASE.get(servicio, 0)
+    if servicio == "Evaluacion" and es_primera_ev:
+        return 0 if origen == "Socio Gimnasio" else precio * 0.5
+    return precio
 
 # --- 4. NAVEGACIÓN ---
 with st.sidebar:
     st.markdown(f'<h1 style="color:{BRAND_GREEN};">🌿 ELITE SYSTEM</h1>', unsafe_allow_html=True)
     menu = st.radio("MENÚ", ["📅 Agenda & Turnos", "📝 Registro & Cobro", "📊 Inteligencia Financiera"])
 
-# --- MÓDULO 1: AGENDA & TURNOS (DISEÑO INTEGRADO) ---
+# --- MÓDULO 1: AGENDA & TURNOS (CON SUB-PANELES) ---
 if menu == "📅 Agenda & Turnos":
-    st.markdown('<p class="main-title">Agenda Elite</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">Control de Sesiones</p>', unsafe_allow_html=True)
     df_a = cargar_nube("agenda")
     df_p = cargar_nube("pacientes")
     hoy = datetime.now().date()
-
-    # Disponibilidad Integrada
-    with st.expander("🔍 CONSULTAR DISPONIBILIDAD (HUECOS LIBRES)", expanded=False):
-        c_f, _ = st.columns([1, 2])
-        f_sel = c_f.date_input("Día:", hoy)
-        libres = obtener_disponibilidad(df_a, f_sel)
-        cols = st.columns(5)
-        for i, h in enumerate(libres):
-            cols[i % 5].markdown(f'<div class="chip-libre">{h}</div>', unsafe_allow_html=True)
-
-    st.divider()
 
     t_hoy = df_a[df_a['Fecha'].astype(str) == str(hoy)].sort_values("Hora")
     
@@ -127,70 +107,77 @@ if menu == "📅 Agenda & Turnos":
         st.info("No hay turnos para hoy.")
     else:
         for _, t in t_hoy.iterrows():
-            # Obtener datos de sesiones
             rest = 10
             if not df_p.empty:
                 p_match = df_p[df_p['Nombre'] == t['Paciente']]
                 if not p_match.empty:
                     rest = pd.to_numeric(p_match['Sesiones_Restantes'].iloc[-1], errors='coerce')
 
-            # Renderizado de Tarjeta Integrada
-            with st.container():
-                # Creamos el diseño visual con HTML
-                alerta_html = ""
-                if rest == 2: alerta_html = f"<div class='alerta-badge penultima'>⚠️ PENÚLTIMA SESIÓN</div>"
-                elif rest <= 1: alerta_html = f"<div class='alerta-badge ultima'>♻️ ÚLTIMA SESIÓN</div>"
+            # Render de Tarjeta
+            st.markdown(f"""
+            <div class="turno-card">
+                <div>
+                    <span style="color:{BRAND_GREEN}; font-size:24px; font-weight:bold;">{t['Hora']} hs</span><br>
+                    <span style="font-size:20px;">{t['Paciente']}</span><br>
+                    <small style="color:{NEON_GREEN if rest <= 2 else 'white'};">Sesiones restantes: {rest}</small>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Botones con espacio debajo
+            c1, c2, c3 = st.columns([1, 1, 2])
+            with c1:
+                renovar = st.button("🛒 Renovar", key=f"r_{t['Hora']}")
+            with c2:
+                reagendar = st.button("⚙️ Reagendar", key=f"m_{t['Hora']}")
+            
+            # SUB-PANELES DINÁMICOS
+            if renovar:
+                st.markdown('<div class="sub-panel">', unsafe_allow_html=True)
+                st.write(f"### Renovación para {t['Paciente']}")
+                st.selectbox("Nuevo Plan:", ["Plan x5", "Plan x10"], key=f"sel_{t['Hora']}")
+                st.button("Confirmar Pago y Renovar", key=f"conf_{t['Hora']}")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            if reagendar:
+                st.markdown('<div class="sub-panel">', unsafe_allow_html=True)
+                st.write("### Seleccionar Nuevo Horario")
+                st.time_input("Nueva Hora:", key=f"time_{t['Hora']}")
+                st.button("Actualizar Turno", key=f"upd_{t['Hora']}")
+                st.markdown('</div>', unsafe_allow_html=True)
 
-                # Abrimos contenedor de la tarjeta
-                st.markdown(f"""
-                <div class="turno-card">
-                    <div class="card-info">
-                        <span style="color:{BRAND_GREEN}; font-size:22px; font-weight:bold;">{t['Hora']} hs</span><br>
-                        <span style="font-size:18px;">{t['Paciente']}</span><br>
-                        <small style="opacity:0.8;">{t['Servicio']}</small><br>
-                        {alerta_html}
-                    </div>
-                """, unsafe_allow_html=True)
-                
-                # Insertamos los botones de Streamlit en la sección de acciones de la tarjeta
-                c_btn1, c_btn2 = st.columns([4, 1]) # Espaciador para alinear botones a la derecha
-                with c_btn2:
-                    if rest <= 2:
-                        if st.button("🛒 Renovar", key=f"ren_{t['Hora']}_{t['Paciente']}"):
-                            st.toast(f"Renovación para {t['Paciente']}")
-                    if st.button("⚙️ Reagendar", key=f"mod_{t['Hora']}_{t['Paciente']}"):
-                        st.toast("Cambiando turno...")
-                
-                st.markdown("</div>", unsafe_allow_html=True) # Cerramos el div de la tarjeta
-
-# --- MÓDULO 2: REGISTRO & COBRO (FUNCIONAL V9) ---
+# --- MÓDULO 2: REGISTRO & COBRO (AUTOMATIZADO) ---
 elif menu == "📝 Registro & Cobro":
-    st.markdown('<p class="main-title">Registro & Venta</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">Registro & Venta Automática</p>', unsafe_allow_html=True)
     df_p = cargar_nube("pacientes")
-    with st.form("form_v10"):
+    
+    with st.form("registro_v11"):
         c1, c2 = st.columns(2)
         with c1:
-            nombre = st.text_input("Nombre")
+            nombre = st.text_input("Nombre Completo")
             dni = st.text_input("DNI")
-            dx = st.text_area("Dx")
+            origen = st.selectbox("Origen del Paciente", ["Socio Gimnasio", "Captación Propia"])
         with c2:
-            origen = st.selectbox("Origen", ["Socio Gimnasio", "Captación Propia"])
-            serv = st.selectbox("Servicio", ["Evaluacion", "Sesion Individual", "Plan x5", "Plan x10"])
-            m_lista = st.number_input("Precio Lista", min_value=0)
-            pago_f = m_lista
-            if serv == "Evaluacion" and not df_p.empty:
-                if df_p[(df_p['DNI'].astype(str) == str(dni)) & (df_p['Servicio'] == "Evaluacion")].empty:
-                    pago_f = 0 if origen == "Socio Gimnasio" else m_lista * 0.5
-            st.write(f"### Cobro: ${pago_f}")
+            serv = st.selectbox("Servicio / Plan", list(PRECIOS_BASE.keys()))
+            
+            # Cálculo automático de bonificación
+            es_primera_ev = True
+            if not df_p.empty and dni:
+                es_primera_ev = df_p[(df_p['DNI'].astype(str) == str(dni)) & (df_p['Servicio'] == "Evaluacion")].empty
+            
+            precio_final = calcular_pago(serv, origen, es_primera_ev)
+            st.write(f"## Total a Cobrar: ${precio_final:,.0f}")
+            if serv == "Evaluacion" and es_primera_ev:
+                st.success("¡Bonificación por primera vez aplicada!")
         
-        st.form_submit_button("CONSOLIDAR")
+        st.form_submit_button("CONSOLIDAR REGISTRO")
 
-# --- MÓDULO 3: FINANZAS (FUNCIONAL V9) ---
+# --- MÓDULO 3: FINANZAS ---
 elif menu == "📊 Inteligencia Financiera":
-    st.markdown('<p class="main-title">Finanzas</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-title">Rendimiento Financiero Elite</p>', unsafe_allow_html=True)
     df_f = cargar_nube("pacientes")
     if not df_f.empty:
         df_f['Pago'] = pd.to_numeric(df_f['Pago'], errors='coerce').fillna(0)
-        df_stats = df_f.groupby('Servicio')['Pago'].sum().reset_index()
-        fig = px.bar(df_stats, x='Servicio', y='Pago', color='Pago', color_continuous_scale='Greens')
+        st.metric("Utilidad Total", f"${df_f['Pago'].sum():,.0f}")
+        fig = px.bar(df_f.groupby('Servicio')['Pago'].sum().reset_index(), x='Servicio', y='Pago', color='Pago', color_continuous_scale='Greens')
         st.plotly_chart(fig, use_container_width=True)
