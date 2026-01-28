@@ -4,8 +4,8 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 import urllib.parse
 
-# --- 1. CONFIGURACIÓN ---
-st.set_page_config(page_title="Elite System V39", layout="wide", page_icon="🌿")
+# --- 1. CONFIGURACIÓN Y ESTÉTICA ---
+st.set_page_config(page_title="Elite System V40", layout="wide", page_icon="🌿")
 
 PRECIOS_BASE = {
     "Evaluacion": 36000, "Sesion Especializada": 36000, "Sesion Individual": 24000,
@@ -15,117 +15,196 @@ PRECIOS_BASE = {
     "Masaje Completo": {"Socio": 38000, "Gral": 45000}
 }
 
-# --- 2. GESTIÓN DE DATOS ---
+BRAND_GREEN = "#60b067"
+
+st.markdown(f"""
+    <style>
+    .stApp {{ background-color: #FFFFFF; color: #1E1E1E; }}
+    .turno-card {{
+        background: rgba(30, 30, 30, 0.95); border-left: 8px solid {BRAND_GREEN};
+        padding: 15px; border-radius: 12px; margin-bottom: 10px; color: white;
+    }}
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 2. MOTOR DE DATOS (CONEXIÓN SEGURA) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def cargar_datos():
     try:
-        p_df = conn.read(worksheet="pacientes", ttl="0").dropna(how='all')
-        a_df = conn.read(worksheet="agenda", ttl="0").dropna(how='all')
-        for col in ['Pago', 'Sesiones_Restantes', 'Sesiones_Totales']:
-            if col in p_df.columns:
-                p_df[col] = pd.to_numeric(p_df[col], errors='coerce').fillna(0)
-        return p_df, a_df
-    except Exception:
+        df_pacientes = conn.read(worksheet="pacientes", ttl="0").dropna(how='all')
+        df_agenda = conn.read(worksheet="agenda", ttl="0").dropna(how='all')
+        
+        # Formateo de tipos de datos para cálculos
+        columnas_num = ['Pago', 'Sesiones_Restantes', 'Sesiones_Totales']
+        for col in columnas_num:
+            if col in df_pacientes.columns:
+                df_pacientes[col] = pd.to_numeric(df_pacientes[col], errors='coerce').fillna(0)
+        
+        return df_pacientes, df_agenda
+    except Exception as e:
+        st.error(f"Error de conexión con Sheets: {e}")
         return pd.DataFrame(), pd.DataFrame()
 
 df_p, df_a = cargar_datos()
 
 def guardar_datos(df, hoja):
+    """Sincronización profesional que alinea columnas de Google Sheets"""
     try:
-        df_actual = conn.read(worksheet=hoja, ttl="0")
-        columnas_archivo = df_actual.columns.tolist()
-        df_ajustado = df.reindex(columns=columnas_archivo).fillna("")
+        # Mapeo de columnas actuales para evitar errores de desajuste
+        df_ref = conn.read(worksheet=hoja, ttl="0")
+        columnas_reales = df_ref.columns.tolist()
+        df_ajustado = df.reindex(columns=columnas_reales).fillna("")
         conn.update(worksheet=hoja, data=df_ajustado)
         st.cache_data.clear()
     except Exception as e:
-        st.error(f"Error de sincronización: {e}")
+        st.error(f"Error al grabar datos: {e}")
 
-# --- 3. MOTOR SMART-SYNC ---
-def ejecutar_sync():
+# --- 3. MOTOR SMART-SYNC (EFECTO SUSANA) ---
+def smart_sync():
     if df_a.empty: return
     ahora = datetime.now()
-    hoy_s, hora_s = ahora.strftime("%Y-%m-%d"), ahora.strftime("%H:%M")
-    mask = (df_a['Fecha'].astype(str) <= hoy_s) & (df_a['Hora'].astype(str) < hora_s) & (df_a.get('Estado','') != 'PROCESADO')
+    fecha_hoy = ahora.strftime("%Y-%m-%d")
+    hora_hoy = ahora.strftime("%H:%M")
+    
+    # Detectar turnos que ya pasaron y restarlos del saldo
+    mask = (df_a['Fecha'].astype(str) <= fecha_hoy) & (df_a['Hora'].astype(str) < hora_hoy) & (df_a.get('Estado','') != 'PROCESADO')
+    
     if not df_a[mask].empty:
-        df_p_act, df_a_act = df_p.copy(), df_a.copy()
+        df_p_new, df_a_new = df_p.copy(), df_a.copy()
         for idx, t in df_a[mask].iterrows():
-            dni = str(t.get('DNI', ''))
-            indices = df_p_act[df_p_act['DNI'].astype(str) == dni].index
+            dni_pac = str(t.get('DNI', ''))
+            indices = df_p_new[df_p_new['DNI'].astype(str) == dni_pac].index
             if not indices.empty:
-                df_p_act.at[indices[0], 'Sesiones_Restantes'] = max(0, df_p_act.at[indices[0], 'Sesiones_Restantes'] - 1)
-            df_a_act.at[idx, 'Estado'] = 'PROCESADO'
-        guardar_datos(df_p_act, "pacientes")
-        guardar_datos(df_a_act, "agenda")
+                df_p_new.at[indices[0], 'Sesiones_Restantes'] = max(0, df_p_new.at[indices[0], 'Sesiones_Restantes'] - 1)
+            df_a_new.at[idx, 'Estado'] = 'PROCESADO'
+        guardar_datos(df_p_new, "pacientes")
+        guardar_datos(df_a_new, "agenda")
         st.rerun()
 
-# --- 4. INTERFAZ ---
-menu = st.sidebar.radio("SISTEMA ÉLITE", ["📅 Agenda", "📝 Admisión (con DX)", "📊 Finanzas"])
-g_fijos = st.sidebar.number_input("Gastos Fijos ($)", value=0)
+# --- 4. NAVEGACIÓN PRINCIPAL ---
+opciones = ["📅 Agenda Operativa", "📝 Admisión & DX", "📊 Business Intelligence"]
+menu = st.sidebar.radio("MENÚ ÉLITE MASTER", opciones)
+gastos_fijos = st.sidebar.number_input("Gastos Fijos Mensuales ($)", value=0)
 
-if menu == "📅 Agenda":
-    ejecutar_sync()
-    st.title("Control de Turnos")
-    t1, t2 = st.tabs(["Hoy", "Mañana"])
-    def render(f):
-        res = df_a[df_a['Fecha'].astype(str) == f].sort_values("Hora")
-        if res.empty: st.info("Día libre.")
-        for i, r in res.iterrows():
-            with st.container(border=True):
-                p_row = df_p[df_p['DNI'].astype(str) == str(r['DNI'])]
-                saldo = int(p_row['Sesiones_Restantes'].iloc[0]) if not p_row.empty else 0
-                dx_p = p_row['DX'].iloc[0] if not p_row.empty and 'DX' in p_row.columns else "Sin DX"
-                st.write(f"**{r['Hora']} hs** | {r['Paciente']} | Saldo: **{saldo}** | DX: *{dx_p}*")
+if menu == "📅 Agenda Operativa":
+    smart_sync()
+    st.title("Control de Turnos en Tiempo Real")
+    t1, t2 = st.tabs(["Sesiones de Hoy", "Sesiones de Mañana"])
+
+    def mostrar_agenda(f_filtro):
+        turnos = df_a[df_a['Fecha'].astype(str) == f_filtro].sort_values("Hora")
+        if turnos.empty: st.info("No hay turnos para esta fecha.")
+        for i, r in turnos.iterrows():
+            with st.container():
+                p_data = df_p[df_p['DNI'].astype(str) == str(r.get('DNI',''))]
+                saldo = int(p_data['Sesiones_Restantes'].iloc[0]) if not p_data.empty else 0
+                diagnostico = p_data['DX'].iloc[0] if not p_data.empty and 'DX' in p_data.columns else "Sin DX"
+                
+                st.markdown(f"""
+                <div class="turno-card">
+                    <b>{r['Hora']} hs</b> | {r['Paciente']} | Saldo: <b>{saldo}</b> | DX: <i>{diagnostico}</i>
+                </div>
+                """, unsafe_allow_html=True)
+                
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    with st.popover("Reagendar"):
-                        nf, nh = st.date_input("Fecha", key=f"f{i}"), st.time_input("Hora", key=f"h{i}")
-                        if st.button("Guardar", key=f"b{i}"):
-                            df_a.at[i, 'Fecha'], df_a.at[i, 'Hora'] = nf.strftime("%Y-%m-%d"), nh.strftime("%H:%M")
-                            guardar_datos(df_a, "agenda"); st.rerun()
+                    with st.popover("⚙️ Reagendar"):
+                        nueva_f = st.date_input("Fecha", key=f"f{i}")
+                        nueva_h = st.time_input("Hora", key=f"h{i}")
+                        if st.button("Confirmar", key=f"b{i}"):
+                            df_a.at[i, 'Fecha'] = nueva_f.strftime("%Y-%m-%d")
+                            df_a.at[i, 'Hora'] = nueva_h.strftime("%H:%M")
+                            guardar_datos(df_a, "agenda")
+                            st.rerun()
                 with c2:
-                    if st.button("Renovar", key=f"r{i}"):
-                        st.session_state.p_renovar = r['Paciente']; st.info("Ir a Admisión")
+                    if st.button("🛒 Renovar", key=f"r{i}"):
+                        st.session_state.p_renov = r['Paciente']
+                        st.info("Carga el nuevo plan en el menú Admisión.")
                 with c3:
-                    msg = urllib.parse.quote(f"Hola {r['Paciente']}, recordatorio de turno.")
-                    st.markdown(f'<a href="https://wa.me/{r.get("WhatsApp","")}?text={msg}" target="_blank"><button style="width:100%; background:#25D366; color:white; border:none; padding:5px; border-radius:5px;">WhatsApp</button></a>', unsafe_allow_html=True)
-    with t1: render(datetime.now().strftime("%Y-%m-%d"))
-    with t2: render((datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"))
+                    msg = urllib.parse.quote(f"Hola {r['Paciente']}, te recordamos tu turno en Elite.")
+                    st.markdown(f'<a href="https://wa.me/{r.get("WhatsApp","")}?text={msg}" target="_blank"><button style="width:100%; background:#25D366; color:white; border:none; padding:8px; border-radius:8px; cursor:pointer;">WhatsApp</button></a>', unsafe_allow_html=True)
 
-elif menu == "📝 Admisión (con DX)":
-    st.title("Registro de Paciente y Plan")
-    with st.form("form_dx", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        nom, dni, tel = c1.text_input("Nombre", value=st.session_state.get('p_renovar', '')), c1.text_input("DNI"), c1.text_input("WhatsApp")
-        dx = c1.text_area("DX (Diagnóstico / Notas)")
-        f_i, h_i = c2.date_input("Inicio"), c2.time_input("Hora")
-        dias = c2.multiselect("Días", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"])
-        serv, orig = st.selectbox("Servicio", list(PRECIOS_BASE.keys())), st.selectbox("Origen", ["Socio Gimnasio", "Captación Propia"])
-        p_sug = PRECIOS_BASE[serv]["Socio" if orig=="Socio Gimnasio" else "Gral"] if "Masaje" in serv else PRECIOS_BASE[serv]
-        pago = st.number_input("Cobro ($)", value=float(p_sug))
-        if st.form_submit_button("CONSOLIDAR PLAN"):
-            if nom and dni:
+    with t1: mostrar_agenda(datetime.now().strftime("%Y-%m-%d"))
+    with t2: mostrar_agenda((datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"))
+
+elif menu == "📝 Admisión & DX":
+    st.title("Registro de Pacientes y Diagnóstico")
+    with st.form("form_admision", clear_on_submit=True):
+        col1, col2 = st.columns(2)
+        nombre = col1.text_input("Nombre Completo", value=st.session_state.get('p_renov', ''))
+        dni = col1.text_input("DNI")
+        tel = col1.text_input("WhatsApp")
+        dx_input = col1.text_area("Diagnóstico (DX)")
+        
+        f_ini = col2.date_input("Fecha Inicio", datetime.now())
+        h_ini = col2.time_input("Hora Turno")
+        dias_frec = col2.multiselect("Días", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"])
+        
+        serv = st.selectbox("Servicio / Plan", list(PRECIOS_BASE.keys()))
+        orig = st.selectbox("Origen", ["Socio Gimnasio", "Captación Propia"])
+        
+        # Precio Sugerido
+        es_socio = (orig == "Socio Gimnasio")
+        p_base = PRECIOS_BASE[serv]["Socio" if es_socio else "Gral"] if "Masaje" in serv else PRECIOS_BASE[serv]
+        pago_final = st.number_input("Cobro ($)", value=float(p_base))
+        
+        if st.form_submit_button("CONSOLIDAR Y AGENDAR"):
+            if nombre and dni:
+                # Calcular cantidad de sesiones
                 cant = 10 if "x10" in serv else (5 if "x5" in serv else 1)
-                np = pd.DataFrame([{"DNI": dni, "Nombre": nom, "WhatsApp": tel, "Origen": orig, "Servicio": serv, "Pago": pago, "Sesiones_Totales": cant, "Sesiones_Restantes": cant, "Fecha_Inicio": f_i.strftime("%Y-%m-%d"), "DX": dx}])
-                d_m = {"Lunes":0,"Martes":1,"Miércoles":2,"Jueves":3,"Viernes":4,"Sábado":5}
-                fs, curr = [], f_i
-                while len(fs) < cant:
-                    if not dias or curr.weekday() in [d_m[d] for d in dias]: fs.append(curr.strftime("%Y-%m-%d"))
-                    curr += timedelta(days=1)
-                na = pd.DataFrame([{"Fecha": f, "Hora": h_i.strftime("%H:%M"), "Paciente": nom, "DNI": dni, "WhatsApp": tel, "Estado": "PENDIENTE", "Servicio": serv} for f in fs])
-                guardar_datos(pd.concat([df_p, np], ignore_index=True), "pacientes")
-                guardar_datos(pd.concat([df_a, na], ignore_index=True), "agenda")
-                st.success("¡Plan Guardado!"); st.rerun()
+                
+                # 1. Crear Registro de Paciente
+                new_pac = pd.DataFrame([{
+                    "DNI": dni, "Nombre": nombre, "WhatsApp": tel, "Origen": orig, 
+                    "Servicio": serv, "Pago": pago_final, "Sesiones_Totales": cant, 
+                    "Sesiones_Restantes": cant, "Fecha_Inicio": f_ini.strftime("%Y-%m-%d"), "DX": dx_input
+                }])
+                
+                # 2. Generar Agenda Automática
+                d_map = {"Lunes":0, "Martes":1, "Miércoles":2, "Jueves":3, "Viernes":4, "Sábado":5}
+                fechas, actual = [], f_ini
+                while len(fechas) < cant:
+                    if not dias_frec or actual.weekday() in [d_map[d] for d in dias_frec]:
+                        fechas.append(actual.strftime("%Y-%m-%d"))
+                    actual += timedelta(days=1)
+                
+                new_age = pd.DataFrame([{
+                    "Fecha": f, "Hora": h_ini.strftime("%H:%M"), "Paciente": nombre, 
+                    "DNI": dni, "WhatsApp": tel, "Estado": "PENDIENTE", "Servicio": serv
+                } for f in fechas])
+                
+                guardar_datos(pd.concat([df_p, new_pac], ignore_index=True), "pacientes")
+                guardar_datos(pd.concat([df_a, new_age], ignore_index=True), "agenda")
+                st.success(f"¡Éxito! Plan consolidado para {nombre}.")
+                if 'p_renov' in st.session_state: del st.session_state.p_renov
+                st.rerun()
 
-elif menu == "📊 Finanzas":
-    st.title("Auditoría Financiera")
-    c1, c2 = st.columns(2)
-    f_d, f_h = c1.date_input("Desde", datetime.now()-timedelta(days=30)), c2.date_input("Hasta", datetime.now())
+elif menu == "📊 Business Intelligence":
+    st.title("Auditoría y Rentabilidad")
+    cf1, cf2 = st.columns(2)
+    desde, hasta = cf1.date_input("Desde", datetime.now() - timedelta(days=30)), cf2.date_input("Hasta", datetime.now())
+    
     df_p['Fecha_Inicio'] = pd.to_datetime(df_p['Fecha_Inicio'], errors='coerce')
-    df_f = df_p[(df_p['Fecha_Inicio'].dt.date >= f_d) & (df_p['Fecha_Inicio'].dt.date <= f_h)].copy()
-    df_f['Cesion'] = df_f.apply(lambda x: x['Pago']*0.3 if x['Origen']=="Socio Gimnasio" else x['Pago']*0.2, axis=1)
-    b, c = df_f['Pago'].sum(), df_f['Cesion'].sum()
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Ingresos", f"${b:,.0f}"); m2.metric("Cesiones", f"-${c:,.0f}"); m3.metric("Neto", f"${b-c-g_fijos:,.0f}")
-    st.dataframe(df_f[['Nombre', 'DX', 'Origen', 'Pago', 'Cesion']], use_container_width=True)
-    st.download_button("📥 Excel", df_f.to_csv(index=False).encode('utf-8'), "Elite.csv", "text/csv")
+    df_f = df_p[(df_p['Fecha_Inicio'].dt.date >= desde) & (df_p['Fecha_Inicio'].dt.date <= hasta)].copy()
+    
+    # Cálculo de comisiones 30/20 solicitado
+    def calc_cesion(row):
+        return row['Pago'] * 0.30 if row['Origen'] == "Socio Gimnasio" else row['Pago'] * 0.20
+    
+    df_f['Monto_Cesion'] = df_f.apply(calc_cesion, axis=1)
+    df_f['Utilidad_Neta'] = df_f['Pago'] - df_f['Monto_Cesion']
+    
+    bruto, total_cesion = df_f['Pago'].sum(), df_f['Monto_Cesion'].sum()
+    neta_total = bruto - total_cesion - gastos_fijos
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Ingresos Totales", f"${bruto:,.0f}")
+    c2.metric("Cesiones (Gimnasio/Propio)", f"-${total_cesion:,.0f}")
+    c3.metric("Utilidad Neta Final", f"${neta_total:,.0f}")
+
+    st.subheader("Base de Datos Histórica")
+    st.dataframe(df_f[['Nombre', 'DX', 'Origen', 'Servicio', 'Pago', 'Monto_Cesion', 'Utilidad_Neta']], use_container_width=True)
+    
+    csv = df_f.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Exportar Reporte para Excel", csv, "Elite_Report.csv", "text/csv")
