@@ -178,31 +178,67 @@ elif st.session_state['menu_actual'] == "🔍 Buscador & Gestión":
     else:
         st.dataframe(df_p, use_container_width=True)
 
-# --- MÓDULO 4: PANEL FINANCIERO ---
-elif st.session_state['menu_actual'] == "📊 Panel Financiero":
-    st.header("Contabilidad")
+# --- MÓDULO 4: PANEL FINANCIERO (CON FILTRO DE MES Y LÓGICA DE COBRO) ---
+elif menu == "📊 Panel Financiero":
+    st.header("Análisis de Ingresos y Comisiones")
+    
     df_p = obtener_datos("pacientes")
+    df_a = obtener_datos("agenda")
+    
     if not df_p.empty:
+        # Convertir fechas para filtrar
         df_p['Fecha_Inicio'] = pd.to_datetime(df_p['Fecha_Inicio'])
         df_p['Mes'] = df_p['Fecha_Inicio'].dt.strftime('%m-%Y')
-        mes_selec = st.selectbox("Seleccionar Mes", sorted(df_p['Mes'].unique(), reverse=True))
+        
+        # Filtro de Mes
+        meses_disponibles = sorted(df_p['Mes'].unique())
+        mes_selec = st.selectbox("Filtrar por Mes (Inicio de Plan)", meses_disponibles, index=len(meses_disponibles)-1)
+        
         df_mes = df_p[df_p['Mes'] == mes_selec].copy()
         
-        # Lógica de comisiones y bonificaciones (30% Socio Gym / 20% Propia)
-        def calcular_finanzas(row):
-            comision = 0
-            pago = float(row['Pago'])
-            if "Plan" in str(row['Servicio']) or row['Fecha_Inicio'] <= datetime.now():
-                if pago > 0:
-                    tasa = 0.30 if row['Origen'] == "Socio Gimnasio" else 0.20
-                    comision = pago * tasa
-                return pd.Series([pago, comision, pago - comision])
-            return pd.Series([0, 0, 0])
-
-        df_mes[['Real', 'Cedido', 'Neto']] = df_mes.apply(calcular_finanzas, axis=1)
+        # LÓGICA DE FACTURACIÓN REAL
+        hoy = datetime.now()
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Ingreso Bruto", f"${df_mes['Real'].sum():,.0f}")
-        c2.metric("Comisiones", f"-${df_mes['Cedido'].sum():,.0f}")
-        c3.metric("Neto Elite", f"${df_mes['Neto'].sum():,.0f}")
-        st.dataframe(df_mes[['Fecha_Inicio', 'Nombre', 'Servicio', 'Origen', 'Real', 'Cedido', 'Neto']], use_container_width=True)
+        def es_facturable(row):
+            # Planes se cobran 100% por adelantado
+            if "Plan" in str(row['Servicio']):
+                return row['Pago']
+            # Sesiones o Evaluaciones solo si ya pasaron o son hoy
+            else:
+                fecha_turno = pd.to_datetime(row['Fecha_Inicio'])
+                if fecha_turno <= hoy:
+                    return row['Pago']
+                return 0.0
+
+        df_mes['Facturado_Real'] = df_mes.apply(es_facturable, axis=1)
+        df_mes['Comision_Monto'] = df_mes.apply(lambda x: calcular_comision(x['Facturado_Real'], x['Origen']), axis=1)
+        df_mes['Neto_Elite'] = df_mes['Facturado_Real'].astype(float) - df_mes['Comision_Monto']
+        
+        # Conteo de sesiones atendidas (desde la tabla agenda)
+        df_a['Fecha'] = pd.to_datetime(df_a['Fecha'])
+        sesiones_atendidas = len(df_a[(df_a['Fecha'] <= hoy)])
+
+        # Métricas
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Facturado (Mes)", f"${df_mes['Facturado_Real'].sum():,.0f}")
+        with c2:
+            st.metric("Comisiones Cedidas", f"-${df_mes['Comision_Monto'].sum():,.0f}")
+        with c3:
+            st.metric("Neto Elite", f"${df_mes['Neto_Elite'].sum():,.0f}")
+        with c4:
+            st.metric("Sesiones Atendidas", sesiones_atendidas)
+
+        st.divider()
+        st.subheader(f"Desglose de Movimientos: {mes_selec}")
+        
+        def marcar_estado(row):
+            if "Plan" in str(row['Servicio']): return "Cobrado (Adelantado)"
+            return "Cobrado (Turno cumplido)" if pd.to_datetime(row['Fecha_Inicio']) <= hoy else "Pendiente de Turno"
+
+        df_mes['Estado_Cobro'] = df_mes.apply(marcar_estado, axis=1)
+        
+        tabla_fin = df_mes[['Fecha_Inicio', 'Nombre', 'Servicio', 'Estado_Cobro', 'Facturado_Real', 'Comision_Monto', 'Neto_Elite']]
+        st.dataframe(tabla_fin, use_container_width=True)
+    else:
+        st.info("No hay datos financieros.")
