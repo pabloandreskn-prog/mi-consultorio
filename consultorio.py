@@ -3,7 +3,7 @@ import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURACIÓN Y ESTILO ---
+# --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="Elite System Cloud", layout="wide", page_icon="🌿")
 
 BRAND_GREEN = "#60b067"
@@ -14,32 +14,134 @@ st.markdown(f"""
     <style>
     .stApp {{ background-color: #FAFAFA; }}
     .card {{ 
-        background: white; padding: 20px; border-radius: 15px; 
-        border-left: 5px solid {BRAND_GREEN}; margin-bottom: 10px; 
-        box-shadow: 0px 2px 5px rgba(0,0,0,0.05); 
+        background: white; padding: 18px; border-radius: 12px; 
+        border-left: 6px solid {BRAND_GREEN}; margin-bottom: 12px; 
+        box-shadow: 0px 3px 6px rgba(0,0,0,0.08); 
     }}
-    .alert-pago {{ color: {BRAND_RED}; font-weight: bold; font-size: 13px; border: 1px solid {BRAND_RED}; padding: 2px 5px; border-radius: 5px; }}
+    .dx-label {{ color: #555; font-style: italic; font-size: 13px; }}
+    .sesiones-tag {{ background: #e8f5e9; color: #2e7d32; padding: 2px 8px; border-radius: 10px; font-weight: bold; font-size: 12px; }}
+    .alert-pago {{ color: {BRAND_RED}; font-weight: bold; font-size: 11px; border: 1px solid {BRAND_RED}; padding: 1px 4px; border-radius: 4px; }}
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN Y FUNCIONES ---
+# --- 2. CONEXIÓN ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def obtener_datos(pestaña):
     return conn.read(worksheet=pestaña, ttl="0")
 
-def calcular_comision_valor(pago, origen):
-    try:
-        pago_f = float(pago)
-        return pago_f * (0.30 if origen == "Socio Gimnasio" else 0.20)
-    except: return 0.0
-
-COL_PACIENTES = ["DNI", "Nombre", "WhatsApp", "DX", "Origen", "Servicio", "Pago", "Fecha_Inicio", "Sesiones_Totales"]
-COL_AGENDA = ["Fecha", "Hora", "Paciente", "Servicio"]
 HORARIOS_LABORALES = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "16:00", "17:00", "18:00", "19:00", "20:00"]
 
 if 'menu_actual' not in st.session_state:
     st.session_state['menu_actual'] = "📅 Agenda & Turnos"
+
+# --- MÓDULO 1: AGENDA & TURNOS (Semaforo Corregido + Tarjetas Detalladas) ---
+if st.session_state['menu_actual'] == "📅 Agenda & Turnos":
+    st.header("Agenda Diaria")
+    fecha_ver = st.date_input("Ver calendario", datetime.now())
+    fecha_str = fecha_ver.strftime("%Y-%m-%d")
+    
+    df_a = obtener_datos("agenda")
+    df_p = obtener_datos("pacientes")
+    
+    # Filtrado ultra-preciso para el semáforo
+    turnos_dia = df_a[df_a['Fecha'].astype(str) == fecha_str].copy()
+    # Limpiamos las horas para la comparación (quitamos "hs", espacios y aseguramos formato HH:MM)
+    horas_ocupadas_limpias = turnos_dia['Hora'].astype(str).str.replace(" hs", "").str.strip().tolist()
+
+    with st.expander("🔍 Estado de Disponibilidad Horaria", expanded=True):
+        cols = st.columns(len(HORARIOS_LABORALES))
+        for idx, h in enumerate(HORARIOS_LABORALES):
+            # Comparamos la hora laboral con la lista limpia
+            if h in horas_ocupadas_limpias:
+                cols[idx].markdown(f"<div style='text-align:center; color:{BRAND_ORANGE};'><b>🟠 {h}</b></div>", unsafe_allow_html=True)
+            else:
+                cols[idx].markdown(f"<div style='text-align:center; color:{BRAND_GREEN};'><b>🟢 {h}</b></div>", unsafe_allow_html=True)
+
+    st.divider()
+
+    if not turnos_dia.empty:
+        for i, t in turnos_dia.sort_values(by="Hora").iterrows():
+            # Obtener info extra del paciente para la tarjeta
+            info_p = df_p[df_p['Nombre'] == t['Paciente']].tail(1).to_dict('records')
+            p = info_p[0] if info_p else {}
+            
+            # Cálculo de sesiones restantes
+            total_plan = int(p.get('Sesiones_Totales', 1))
+            atendidas = len(df_a[(df_a['Paciente'] == t['Paciente']) & (pd.to_datetime(df_a['Fecha']) <= datetime.now())])
+            restantes = total_plan - atendidas
+
+            with st.container():
+                c1, c2, c3 = st.columns([3.5, 1, 1])
+                es_pack = "Plan X" in str(t['Servicio'])
+                
+                with c1:
+                    status = "" if es_pack else '<span class="alert-pago">DEBE PAGAR</span>'
+                    dx_text = f"<div class='dx-label'>📋 DX: {p.get('DX', 'Sin diagnóstico')}</div>"
+                    sesiones_html = f"<span class='sesiones-tag'>{restantes} ses. restantes</span>"
+                    
+                    st.markdown(f"""
+                        <div class="card">
+                            <b>{t["Hora"]}</b> | <b>{t["Paciente"]}</b> {status} {sesiones_html}<br>
+                            <small>{t["Servicio"]}</small>
+                            {dx_text}
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with c2:
+                    if st.button("🔄 Mover", key=f"re_{i}"):
+                        st.session_state['reagenda_data'] = {
+                            'Paciente': t['Paciente'], 'Servicio': t['Servicio'],
+                            'Fecha_Vieja': t['Fecha'], 'Hora_Vieja': t['Hora'],
+                            'DNI': p.get('DNI', ""), 'WhatsApp': p.get('WhatsApp', ""),
+                            'DX': p.get('DX', ""), 'Origen': p.get('Origen', "Socio Gimnasio")
+                        }
+                        st.session_state['menu_actual'] = "📝 Registro & Renovación"
+                        st.rerun()
+                with c3:
+                    if not es_pack: st.button("💵 Cobrar", key=f"pay_{i}")
+    else:
+        st.info(f"Día sin turnos agendados.")
+
+# --- MÓDULO 2: REGISTRO (Mantenimiento de funciones de reagenda rápida) ---
+elif st.session_state['menu_actual'] == "📝 Registro & Renovación":
+    st.header("Gestión de Turnos")
+    re = st.session_state.get('reagenda_data', {})
+    
+    with st.form("form_registro"):
+        c1, c2 = st.columns(2)
+        with c1:
+            nombre = st.text_input("Paciente", value=re.get('Paciente', ""))
+            dni = st.text_input("DNI", value=re.get('DNI', ""))
+            whatsapp = st.text_input("WhatsApp", value=re.get('WhatsApp', ""))
+        with c2:
+            dx = st.text_input("Diagnóstico (DX)", value=re.get('DX', ""))
+            origen = st.selectbox("Origen", ["Socio Gimnasio", "Captación Propia"], index=0 if re.get('Origen') == "Socio Gimnasio" else 1)
+            servicio = st.selectbox("Servicio", ["Plan X10", "Plan X5", "Sesion Individual", "Evaluacion"])
+        
+        monto = st.number_input("Pago Recibido ($)", min_value=0)
+        f_inicio = st.date_input("Fecha", value=datetime.now())
+        h_inicio = st.selectbox("Hora", HORARIOS_LABORALES)
+        
+        if st.form_submit_button("CONFIRMAR"):
+            df_agenda = obtener_datos("agenda")
+            if re: # Borrado de turno viejo si es reagenda
+                df_agenda = df_agenda[~((df_agenda['Paciente'] == re['Paciente']) & 
+                                      (df_agenda['Fecha'].astype(str) == str(re['Fecha_Vieja'])) & 
+                                      (df_agenda['Hora'].astype(str) == str(re['Hora_Vieja'])))]
+            
+            nuevo = pd.DataFrame([[str(f_inicio), h_inicio, nombre, servicio]], columns=COL_AGENDA)
+            conn.update(worksheet="agenda", data=pd.concat([df_agenda, nuevo], ignore_index=True))
+            
+            # Actualización de ficha histórica
+            df_p = obtener_datos("pacientes")
+            cant = 10 if "X10" in servicio else (5 if "X5" in servicio else 1)
+            nuevo_p = pd.DataFrame([[dni, nombre, whatsapp, dx, origen, servicio, monto, str(f_inicio), cant]], columns=["DNI", "Nombre", "WhatsApp", "DX", "Origen", "Servicio", "Pago", "Fecha_Inicio", "Sesiones_Totales"])
+            conn.update(worksheet="pacientes", data=pd.concat([df_p, nuevo_p], ignore_index=True))
+
+            if 'reagenda_data' in st.session_state: del st.session_state['reagenda_data']
+            st.session_state['menu_actual'] = "📅 Agenda & Turnos"
+            st.rerun()
 
 # --- 3. MENÚ LATERAL ---
 with st.sidebar:
@@ -191,3 +293,4 @@ elif st.session_state['menu_actual'] == "📊 Panel Financiero":
         c3.metric("Neto Elite", f"${df_mes['Neto'].sum():,.0f}")
         c4.metric("Atendidas Mes", atendidas_mes)
         st.dataframe(df_mes[['Fecha_Inicio', 'Nombre', 'Servicio', 'Facturado_Real', 'Comision', 'Neto']], use_container_width=True)
+
