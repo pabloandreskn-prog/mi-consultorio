@@ -31,17 +31,18 @@ st.markdown(f"""
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def obtener_datos(pestaña):
-    # Trae los datos ignorando el cache (ttl=0) para ver cambios inmediatos
     return conn.read(worksheet=pestaña, ttl="0")
 
-COL_PACIENTES = ["DNI", "Nombre", "Contacto", "Dx", "Origen", "Servicio", "Pago", "Fecha", "Sesiones"]
+# Definición de columnas basada en tu planilla real
+COL_PACIENTES = ["DNI", "Nombre", "WhatsApp", "DX", "Origen", "Servicio", "Pago", "Fecha_Inicio", "Sesiones_Totales"]
 COL_AGENDA = ["Fecha", "Hora", "Paciente", "Servicio"]
 
 def calcular_comision(pago, origen):
     try:
-        # 30% para socios del gym, 20% para captación propia
-        tasa = 0.30 if origen == "Socio Gimnasio" else 0.20
-        return float(pago) * tasa
+        pago_float = float(pago)
+        # Socio Gimnasio cede 30%, Captación Propia cede 20%
+        porcentaje = 0.30 if origen == "Socio Gimnasio" else 0.20
+        return pago_float * porcentaje
     except:
         return 0.0
 
@@ -58,7 +59,6 @@ if menu == "📅 Agenda & Turnos":
     fecha_ver = st.date_input("Seleccionar Fecha", datetime.now())
     
     df_agenda = obtener_datos("agenda")
-    # Filtrar por fecha seleccionada
     turnos_dia = df_agenda[df_agenda['Fecha'] == str(fecha_ver)]
     
     c1, c2 = st.columns([1, 3])
@@ -86,11 +86,11 @@ elif menu == "📝 Registro de Pacientes":
         with c1:
             nombre = st.text_input("Nombre y Apellido")
             dni = st.text_input("DNI")
-            contacto = st.text_input("WhatsApp (Sin 0 ni 15)")
+            whatsapp = st.text_input("WhatsApp (ej: 549...)")
         with c2:
-            dx = st.text_input("Diagnóstico / Motivo")
+            dx = st.text_input("Diagnóstico (DX)")
             origen = st.selectbox("Origen del Paciente", ["Socio Gimnasio", "Captación Propia"])
-            servicio = st.selectbox("Servicio", ["Plan X5", "Plan X10", "Sesión Individual", "Evaluación"])
+            servicio = st.selectbox("Servicio", ["Plan X10", "Plan X5", "Sesion Individual", "Evaluacion"])
         
         monto = st.number_input("Pago Recibido ($)", min_value=0)
         f_inicio = st.date_input("Fecha de Primera Sesión", datetime.now())
@@ -103,16 +103,15 @@ elif menu == "📝 Registro de Pacientes":
 
         if st.form_submit_button("GUARDAR Y SINCRONIZAR"):
             if nombre and dni:
-                # Determinar sesiones según servicio
-                cant = 5 if "X5" in servicio else (10 if "X10" in servicio else 1)
+                cant = 10 if "X10" in servicio else (5 if "X5" in servicio else 1)
                 
-                # A. Actualizar Base de Pacientes
+                # A. Actualizar Pacientes
                 df_p_previo = obtener_datos("pacientes")
-                nuevo_p = pd.DataFrame([[dni, nombre, contacto, dx, origen, servicio, monto, str(f_inicio), cant]], columns=COL_PACIENTES)
+                nuevo_p = pd.DataFrame([[dni, nombre, whatsapp, dx, origen, servicio, monto, str(f_inicio), cant]], columns=COL_PACIENTES)
                 df_p_final = pd.concat([df_p_previo, nuevo_p], ignore_index=True)
                 conn.update(worksheet="pacientes", data=df_p_final)
                 
-                # B. Lógica de Agenda (Programación de múltiples días)
+                # B. Lógica de Agenda
                 lista_turnos = []
                 if dias_fijos and dias_selec:
                     d_map = {"Lunes":0, "Martes":1, "Miércoles":2, "Jueves":3, "Viernes":4, "Sábado":5}
@@ -126,61 +125,60 @@ elif menu == "📝 Registro de Pacientes":
                 else:
                     lista_turnos.append([str(f_inicio), h_inicio.strftime("%H:%M"), nombre, servicio])
                 
-                # C. Actualizar Agenda en la Nube
+                # C. Actualizar Agenda
                 df_a_previo = obtener_datos("agenda")
                 df_a_nuevo = pd.DataFrame(lista_turnos, columns=COL_AGENDA)
                 df_a_final = pd.concat([df_a_previo, df_a_nuevo], ignore_index=True)
                 conn.update(worksheet="agenda", data=df_a_final)
                 
-                st.success(f"✅ ¡{nombre} registrado con éxito! {len(lista_turnos)} turnos añadidos.")
+                st.success("✅ ¡Sincronización Cloud exitosa!")
                 st.balloons()
                 st.rerun()
-            else:
-                st.error("Por favor completa Nombre y DNI.")
 
 # --- MÓDULO 3: BUSCADOR & HISTORIAL ---
 elif menu == "🔍 Buscador & Historial":
     st.header("Buscador de Pacientes")
     df_p = obtener_datos("pacientes")
-    
     busqueda = st.text_input("Buscar por Nombre o DNI")
     
     if busqueda:
-        resultado = df_p[df_p['Nombre'].str.contains(busqueda, case=False) | df_p['DNI'].astype(str).str.contains(busqueda)]
+        resultado = df_p[df_p['Nombre'].str.contains(busqueda, case=False, na=False) | df_p['DNI'].astype(str).str.contains(busqueda)]
         if not resultado.empty:
             st.dataframe(resultado, use_container_width=True)
-            
-            # Ver turnos específicos del paciente buscado
             nombre_paciente = resultado.iloc[0]['Nombre']
-            st.subheader(f"Historial de Turnos: {nombre_paciente}")
+            st.subheader(f"Turnos Programados: {nombre_paciente}")
             df_a = obtener_datos("agenda")
-            turnos_paciente = df_a[df_a['Paciente'] == nombre_paciente]
-            st.table(turnos_paciente.sort_values(by="Fecha", ascending=False))
+            st.table(df_a[df_a['Paciente'] == nombre_paciente].sort_values(by="Fecha"))
         else:
-            st.warning("No se encontraron coincidencias.")
+            st.warning("No se encontró el paciente.")
     else:
         st.dataframe(df_p, use_container_width=True)
 
 # --- MÓDULO 4: PANEL FINANCIERO ---
 elif menu == "📊 Panel Financiero":
-    st.header("Análisis de Ingresos y Comisiones")
+    st.header("Análisis de Ingresos y Comisiones Cedidas")
     df_f = obtener_datos("pacientes")
     
     if not df_f.empty:
-        # Cálculos en tiempo real
-        df_f['Comision'] = df_f.apply(lambda x: calcular_comision(x['Pago'], x['Origen']), axis=1)
-        df_f['Neto'] = df_f['Pago'].astype(float) - df_f['Comision']
+        # Cálculos de comisiones
+        df_f['Comision_Monto'] = df_f.apply(lambda x: calcular_comision(x['Pago'], x['Origen']), axis=1)
+        df_f['%_Cedido'] = df_f['Origen'].apply(lambda x: "30%" if x == "Socio Gimnasio" else "20%")
+        df_f['Ingreso_Neto'] = df_f['Pago'].astype(float) - df_f['Comision_Monto']
         
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.metric("Ingreso Bruto", f"${df_f['Pago'].sum():,.0f}")
+            st.metric("Total Bruto", f"${df_f['Pago'].astype(float).sum():,.0f}")
         with c2:
-            st.metric("Comisiones Gym", f"-${df_f['Comision'].sum():,.0f}", delta_color="inverse")
+            st.metric("Comisiones Cedidas", f"-${df_f['Comision_Monto'].sum():,.0f}", delta_color="inverse")
         with c3:
-            st.metric("Neto Elite", f"${df_f['Neto'].sum():,.0f}")
+            st.metric("Neto Elite", f"${df_f['Ingreso_Neto'].sum():,.0f}")
         
         st.divider()
-        st.subheader("Desglose Detallado")
-        st.dataframe(df_f[['Fecha', 'Nombre', 'Servicio', 'Pago', 'Comision', 'Neto']], use_container_width=True)
+        st.subheader("Tabla de Comisiones Cedidas por Paciente")
+        # Tabla detallada solicitada
+        st.dataframe(
+            df_f[['Fecha_Inicio', 'Nombre', 'Origen', '%_Cedido', 'Pago', 'Comision_Monto', 'Ingreso_Neto']], 
+            use_container_width=True
+        )
     else:
-        st.info("Aún no hay registros financieros.")
+        st.info("No hay datos financieros para mostrar.")
