@@ -179,22 +179,53 @@ elif st.session_state['menu_actual'] == "📝 Registro & Renovación":
             st.session_state['menu_actual'] = "📅 Agenda & Turnos"
             st.rerun()
 
-# Módulos 3 y 4 se mantienen con la lógica robusta previa...
+# --- MÓDULO 3: BUSCADOR (Cálculo de Sesiones Restantes) ---
 elif st.session_state['menu_actual'] == "🔍 Buscador & Gestión":
-    st.header("Buscador")
+    st.header("Buscador Inteligente")
     df_p = obtener_datos("pacientes")
-    busc = st.text_input("Nombre o DNI")
-    if busc:
-        res = df_p[df_p['Nombre'].str.contains(busc, case=False, na=False)]
-        st.dataframe(res, use_container_width=True)
+    df_a = obtener_datos("agenda")
+    busqueda = st.text_input("Nombre o DNI")
+    if busqueda:
+        res = df_p[df_p['Nombre'].str.contains(busqueda, case=False, na=False)]
+        for _, row in res.iterrows():
+            atendidas = len(df_a[(df_a['Paciente'] == row['Nombre']) & (pd.to_datetime(df_a['Fecha']) <= datetime.now())])
+            restantes = int(row['Sesiones_Totales']) - atendidas
+            c1, c2 = st.columns(2)
+            c1.metric("Sesiones Restantes", restantes)
+            if restantes <= 1:
+                if c2.button(f"🔄 RENOVAR: {row['Nombre']}"):
+                    st.session_state['reagenda_data'] = {'Paciente': row['Nombre'], 'Servicio': row['Servicio']}
+                    st.session_state['menu_actual'] = "📝 Registro & Renovación"
+                    st.rerun()
+            st.dataframe(df_a[df_a['Paciente'] == row['Nombre']].sort_values("Fecha"), use_container_width=True)
+    else:
+        st.dataframe(df_p, use_container_width=True)
 
+# --- MÓDULO 4: PANEL FINANCIERO (Inteligencia de Mes y Cobro) ---
 elif st.session_state['menu_actual'] == "📊 Panel Financiero":
-    st.header("Contabilidad")
+    st.header("Análisis Financiero")
     df_p = obtener_datos("pacientes")
+    df_a = obtener_datos("agenda")
     if not df_p.empty:
         df_p['Fecha_Inicio'] = pd.to_datetime(df_p['Fecha_Inicio'])
         df_p['Mes'] = df_p['Fecha_Inicio'].dt.strftime('%m-%Y')
-        mes = st.selectbox("Mes", sorted(df_p['Mes'].unique(), reverse=True))
-        df_mes = df_p[df_p['Mes'] == mes].copy()
-        st.metric("Total Neto", f"${df_mes['Pago'].sum():,.0f}")
-        st.dataframe(df_mes, use_container_width=True)
+        mes_selec = st.selectbox("Seleccionar Mes", sorted(df_p['Mes'].unique(), reverse=True))
+        df_mes = df_p[df_p['Mes'] == mes_selec].copy()
+        hoy = datetime.now()
+
+        def determinar_facturado(row):
+            if "Plan" in str(row['Servicio']): return float(row['Pago'])
+            return float(row['Pago']) if pd.to_datetime(row['Fecha_Inicio']) <= hoy else 0.0
+
+        df_mes['Facturado_Real'] = df_mes.apply(determinar_facturado, axis=1)
+        df_mes['Comision'] = df_mes.apply(lambda x: calcular_comision_valor(x['Facturado_Real'], x['Origen']), axis=1)
+        df_mes['Neto'] = df_mes['Facturado_Real'] - df_mes['Comision']
+        
+        atendidas_mes = len(df_a[(pd.to_datetime(df_a['Fecha']).dt.strftime('%m-%Y') == mes_selec) & (pd.to_datetime(df_a['Fecha']) <= hoy)])
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Ingreso Real", f"${df_mes['Facturado_Real'].sum():,.0f}")
+        c2.metric("Comisiones", f"-${df_mes['Comision'].sum():,.0f}")
+        c3.metric("Neto Elite", f"${df_mes['Neto'].sum():,.0f}")
+        c4.metric("Atendidas Mes", atendidas_mes)
+        st.dataframe(df_mes[['Fecha_Inicio', 'Nombre', 'Servicio', 'Facturado_Real', 'Comision', 'Neto']], use_container_width=True)
