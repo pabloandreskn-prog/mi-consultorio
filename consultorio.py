@@ -6,7 +6,7 @@ import plotly.express as px
 import urllib.parse
 
 # --- 1. CONFIGURACIÓN Y ESTÉTICA ---
-st.set_page_config(page_title="Elite System V28 - Masterpiece", layout="wide", page_icon="🌿")
+st.set_page_config(page_title="Elite System V29 - Financial Master", layout="wide", page_icon="🌿")
 
 PRECIOS_BASE = {
     "Evaluacion": 36000, "Sesion Especializada": 36000, "Sesion Individual": 24000,
@@ -26,9 +26,9 @@ st.markdown(f"""
         background: {DARK_CARD}; border-left: 8px solid {BRAND_GREEN};
         padding: 20px; border-radius: 15px; margin-bottom: 5px; color: white;
     }}
-    .price-badge {{
-        background: {BRAND_GREEN}; color: white; padding: 15px;
-        border-radius: 12px; text-align: center; font-size: 24px; font-weight: bold;
+    .metric-container {{
+        background: #f8f9fa; padding: 20px; border-radius: 15px;
+        border-top: 5px solid {BRAND_GREEN}; text-align: center;
     }}
     .chip-libre {{
         background: rgba(96, 176, 103, 0.1); color: {BRAND_GREEN};
@@ -38,7 +38,7 @@ st.markdown(f"""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN Y PERSISTENCIA ---
+# --- 2. CONEXIÓN Y DATOS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def cargar_datos():
@@ -55,7 +55,7 @@ def guardar_datos(df, hoja):
     conn.update(worksheet=hoja, data=df)
     st.cache_data.clear()
 
-# --- 3. MOTOR DE DESCUENTO AUTOMÁTICO (SMART-SYNC) ---
+# --- 3. MOTOR SMART-SYNC (EFECTO SUSANA) ---
 def smart_sync():
     ahora = datetime.now()
     fecha_h = ahora.strftime("%Y-%m-%d")
@@ -78,80 +78,79 @@ def smart_sync():
         st.rerun()
 
 # --- 4. NAVEGACIÓN ---
-menu = st.sidebar.radio("MENÚ PRINCIPAL", ["📅 Agenda & Turnos", "📝 Registro & Cobro", "📊 Inteligencia Financiera"])
+menu = st.sidebar.radio("SISTEMA ÉLITE V29", ["📅 Agenda Predictiva", "📝 Registro & Venta", "📊 Inteligencia Financiera"])
 gastos_fijos = st.sidebar.number_input("Gastos Fijos Mensuales ($)", value=0)
 
 # --- MÓDULO 1: AGENDA ---
-if menu == "📅 Agenda & Turnos":
+if menu == "📅 Agenda Predictiva":
     smart_sync()
     st.title("Control de Turnos")
     
-    with st.expander("🔍 DISPONIBILIDAD (HUECOS LIBRES)"):
+    with st.expander("🔍 CONSULTAR DISPONIBILIDAD (HUECOS)"):
         f_busq = st.date_input("Día:", datetime.now())
         ocupados = df_a[df_a['Fecha'].astype(str) == str(f_busq)]['Hora'].tolist()
-        libres = [h for h in ["08:00","09:00","10:00","11:00","14:00","15:00","16:00","17:00","18:00"] if h not in ocupados]
+        libres = [h for h in ["08:00","09:00","10:00","11:00","14:00","15:00","16:00","17:00","18:00","19:00"] if h not in ocupados]
         cols = st.columns(5)
         for i, h in enumerate(libres): cols[i%5].markdown(f'<div class="chip-libre">{h}</div>', unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs(["Hoy", "Mañana"])
+    tab1, tab2 = st.tabs(["Sesiones de Hoy", "Sesiones de Mañana"])
     
     def render_agenda(fecha_str):
         turnos = df_a[df_a['Fecha'].astype(str) == fecha_str].sort_values("Hora")
-        if turnos.empty: st.info("Sin turnos.")
+        if turnos.empty: st.info("No hay pacientes agendados para este día.")
         for i, t in turnos.iterrows():
             p_data = df_p[df_p['DNI'].astype(str) == str(t.get('DNI',''))]
             rest = int(p_data['Sesiones_Restantes'].iloc[0]) if not p_data.empty else 0
             
-            st.markdown(f'<div class="turno-card"><b>{t["Hora"]} hs</b> | {t["Paciente"]} | Saldo: {rest}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="turno-card"><b>{t["Hora"]} hs</b> | {t["Paciente"]} | <small>{t["Servicio"]}</small> | Saldo: {rest}</div>', unsafe_allow_html=True)
             
             c1, c2, c3 = st.columns(3)
             with c1:
-                if st.button("🛒 Renovar", key=f"btn_ren_{i}"): st.info(f"Cargar nuevo plan para {t['Paciente']} en Registro.")
-            with c2:
                 with st.popover("⚙️ Reagendar"):
-                    nueva_f = st.date_input("Nueva Fecha", key=f"f_{i}")
-                    nueva_h = st.time_input("Nueva Hora", key=f"h_{i}")
-                    if st.button("Confirmar Cambio", key=f"save_{i}"):
-                        st.success("Fecha actualizada.")
+                    st.date_input("Nueva Fecha", key=f"f_{i}")
+                    st.time_input("Nueva Hora", key=f"h_{i}")
+                    if st.button("Confirmar", key=f"save_{i}"): st.success("Actualizado")
+            with c2:
+                if st.button("🛒 Renovar", key=f"btn_ren_{i}"): st.info("Ir a Registro")
             with c3:
-                msg = urllib.parse.quote(f"Hola {t['Paciente']}, recordatorio de turno.")
-                st.markdown(f'<a href="https://wa.me/{t.get("WhatsApp","")}?text={msg}" target="_blank"><button style="width:100%; background:#25D366; color:white; border:none; height:35px; border-radius:8px;">WhatsApp</button></a>', unsafe_allow_html=True)
+                msg = urllib.parse.quote(f"Hola {t['Paciente']}, te recuerdo tu turno hoy.")
+                st.markdown(f'<a href="https://wa.me/{t.get("WhatsApp","")}?text={msg}" target="_blank"><button style="width:100%; background:#25D366; color:white; border:none; height:35px; border-radius:8px; cursor:pointer;">WhatsApp</button></a>', unsafe_allow_html=True)
 
     with tab1: render_agenda(datetime.now().strftime("%Y-%m-%d"))
     with tab2: render_agenda((datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"))
 
-# --- MÓDULO 2: REGISTRO & COBRO (FIX GRABACIÓN) ---
-elif menu == "📝 Registro & Cobro":
-    st.title("Registro de Paciente")
-    with st.form("form_v28", clear_on_submit=True):
+# --- MÓDULO 2: REGISTRO & VENTA ---
+elif menu == "📝 Registro & Venta":
+    st.title("Admisión y Consolidación")
+    with st.form("form_master", clear_on_submit=True):
         col1, col2 = st.columns(2)
-        nombre = col1.text_input("Nombre Completo")
+        nombre = col1.text_input("Nombre del Paciente")
         dni = col1.text_input("DNI")
-        whats = col1.text_input("WhatsApp")
+        whats = col1.text_input("WhatsApp (ej: 549...)")
         
         f_ini = col2.date_input("Fecha Inicio", datetime.now())
         h_fija = col2.time_input("Hora Fija")
-        dias = col2.multiselect("Días", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"])
+        dias = col2.multiselect("Días de frecuencia", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"])
         
-        serv = st.selectbox("Servicio", list(PRECIOS_BASE.keys()))
+        serv = st.selectbox("Servicio / Plan", list(PRECIOS_BASE.keys()))
         orig = st.selectbox("Origen", ["Socio Gimnasio", "Captación Propia"])
         
-        # Precio sugerido
+        # Lógica de precio automática
         ya_e = not df_p[df_p['DNI'].astype(str) == str(dni)].empty
         p_sug = PRECIOS_BASE[serv]["Socio" if orig == "Socio Gimnasio" else "Gral"] if "Masaje" in serv else PRECIOS_BASE[serv]
         if serv == "Evaluacion" and not ya_e: p_sug = 0 if orig == "Socio Gimnasio" else p_sug * 0.5
         
-        st.write(f"### Total Sugerido: ${p_sug:,.0f}")
-        pago = st.number_input("Confirmar Monto ($)", value=float(p_sug))
+        st.write(f"### 💳 Pago Sugerido: ${p_sug:,.0f}")
+        pago_final = st.number_input("Monto Cobrado ($)", value=float(p_sug))
         
-        if st.form_submit_button("CONSOLIDAR PLAN"):
+        if st.form_submit_button("CONSOLIDAR REGISTRO"):
             if nombre and dni:
                 cant = 10 if "x10" in serv else (5 if "x5" in serv else 1)
                 # 1. Registro Paciente
-                new_p_data = {c: "" for c in df_p.columns}
-                new_p_data.update({"DNI": dni, "Nombre": nombre, "WhatsApp": whats, "Origen": orig, "Servicio": serv, "Pago": pago, "Sesiones_Totales": cant, "Sesiones_Restantes": cant})
+                new_p = {c: "" for c in df_p.columns}
+                new_p.update({"DNI": dni, "Nombre": nombre, "WhatsApp": whats, "Origen": orig, "Servicio": serv, "Pago": pago_final, "Sesiones_Totales": cant, "Sesiones_Restantes": cant})
                 
-                # 2. Registro Agenda
+                # 2. Registro Agenda Masiva
                 d_map = {"Lunes":0, "Martes":1, "Miércoles":2, "Jueves":3, "Viernes":4, "Sábado":5}
                 f_plan, curr = [], f_ini
                 while len(f_plan) < cant:
@@ -164,20 +163,35 @@ elif menu == "📝 Registro & Cobro":
                     row.update({"Fecha": f, "Hora": h_fija.strftime("%H:%M"), "Paciente": nombre, "Servicio": serv, "DNI": dni, "WhatsApp": whats, "Estado": "PENDIENTE"})
                     new_a_rows.append(row)
                 
-                guardar_datos(pd.concat([df_p, pd.DataFrame([new_p_data])], ignore_index=True), "pacientes")
+                guardar_datos(pd.concat([df_p, pd.DataFrame([new_p])], ignore_index=True), "pacientes")
                 guardar_datos(pd.concat([df_a, pd.DataFrame(new_a_rows)], ignore_index=True), "agenda")
-                st.success("Plan grabado con éxito.")
+                st.success(f"Éxito: {nombre} registrado con {cant} sesiones.")
                 st.rerun()
 
-# --- MÓDULO 3: INTELIGENCIA ---
+# --- MÓDULO 3: INTELIGENCIA FINANCIERA ---
 elif menu == "📊 Inteligencia Financiera":
-    st.title("Rendimiento del Consultorio")
-    df_p['Comis'] = df_p.apply(lambda r: r['Pago'] * 0.3 if r['Origen'] == "Socio Gimnasio" else r['Pago'] * 0.2, axis=1)
+    st.title("Analítica de Rentabilidad")
+    
+    # FUNCIONALIDAD CLAVE: DESGLOSE DE COMISIONES
+    df_p['Comis_Gimnasio'] = df_p.apply(lambda r: r['Pago'] * 0.3 if r['Origen'] == "Socio Gimnasio" else 0, axis=1)
+    df_p['Comis_Propia'] = df_p.apply(lambda r: r['Pago'] * 0.2 if r['Origen'] == "Captación Propia" else 0, axis=1)
+    
     bruto = df_p['Pago'].sum()
-    neta = bruto - df_p['Comis'].sum() - gastos_fijos
-    
-    st.columns(3)[0].metric("Utilidad Neta", f"${neta:,.0f}")
-    
-    df_a['Dia'] = pd.to_datetime(df_a['Fecha']).dt.day_name().map({"Monday":"Lunes","Tuesday":"Martes","Wednesday":"Miércoles","Thursday":"Jueves","Friday":"Viernes","Saturday":"Sábado"})
-    rent = df_a.groupby('Dia').size().reset_index(name='Cant').sort_values('Cant', ascending=False)
-    st.plotly_chart(px.bar(rent, x='Dia', y='Cant', title="Flujo de Sesiones por Día", color_discrete_sequence=[BRAND_GREEN]))
+    total_comisiones = df_p['Comis_Gimnasio'].sum() + df_p['Comis_Propia'].sum()
+    neta = bruto - total_comisiones - gastos_fijos
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Ingreso Bruto", f"${bruto:,.0f}")
+    c2.metric("Cedido Gimnasio", f"-${df_p['Comis_Gimnasio'].sum():,.0f}")
+    c3.metric("Cedido Propio", f"-${df_p['Comis_Propia'].sum():,.0f}")
+    c4.metric("UTILIDAD REAL", f"${neta:,.0f}")
+
+    st.divider()
+    col_l, col_r = st.columns(2)
+    with col_l:
+        # RENTABILIDAD POR DÍA
+        df_a['Dia'] = pd.to_datetime(df_a['Fecha']).dt.day_name().map({"Monday":"Lunes","Tuesday":"Martes","Wednesday":"Miércoles","Thursday":"Jueves","Friday":"Viernes","Saturday":"Sábado"})
+        rent_d = df_a.groupby('Dia').size().reset_index(name='Cant').sort_values('Cant', ascending=False)
+        st.plotly_chart(px.bar(rent_d, x='Dia', y='Cant', title="Flujo de Sesiones por Día", color_discrete_sequence=[BRAND_GREEN]))
+    with col_r:
+        st.plotly_chart(px.pie(df_p, values='Pago', names='Origen', title="Distribución de Ingresos", hole=0.5))
