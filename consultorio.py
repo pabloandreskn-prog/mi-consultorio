@@ -4,7 +4,7 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime, timedelta
 
 # --- 1. CONFIGURACIÓN ---
-st.set_page_config(page_title="Elite System v12.0", layout="wide", page_icon="🌿")
+st.set_page_config(page_title="Elite System v13.0", layout="wide", page_icon="🌿")
 
 # Estilos visuales
 BRAND_GREEN, BRAND_RED, BRAND_ORANGE = "#60b067", "#ff4b4b", "#f39c12"
@@ -18,8 +18,7 @@ st.markdown(f"""
         box-shadow: 0px 4px 10px rgba(0,0,0,0.05); 
     }}
     .sesiones-tag {{ background: #e8f5e9; padding: 2px 10px; border-radius: 10px; font-weight: bold; font-size: 12px; }}
-    .alert-pago {{ color: {BRAND_RED}; font-weight: bold; font-size: 10px; border: 1px solid {BRAND_RED}; padding: 2px 5px; border-radius: 4px; text-transform: uppercase; }}
-    .renovacion-tag {{ background: #fff3e0; color: {BRAND_ORANGE}; padding: 2px 10px; border-radius: 10px; font-weight: bold; border: 1px solid {BRAND_ORANGE}; font-size: 12px; }}
+    .alert-pago {{ color: {BRAND_RED}; font-weight: bold; font-size: 10px; border: 1.5px solid {BRAND_RED}; padding: 2px 5px; border-radius: 4px; }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -37,10 +36,8 @@ HORARIOS = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "16:00", "17:0
 # --- 3. CONEXIÓN Y ESTADO ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-if 'menu' not in st.session_state:
-    st.session_state.menu = "📅 Agenda"
-if 'p_renovando' not in st.session_state:
-    st.session_state.p_renovando = {}
+if 'menu' not in st.session_state: st.session_state.menu = "📅 Agenda"
+if 'p_renovando' not in st.session_state: st.session_state.p_renovando = {}
 
 def cargar_datos(pestaña):
     return conn.read(worksheet=pestaña, ttl="0")
@@ -55,7 +52,7 @@ with st.sidebar:
 # --- 5. MÓDULO: AGENDA ---
 if st.session_state.menu == "📅 Agenda":
     st.header("Agenda Diaria")
-    fecha_sel = st.date_input("Ver calendario", datetime.now(), key="agenda_date")
+    fecha_sel = st.date_input("Ver calendario", datetime.now(), key="agenda_date_v13")
     
     df_a = cargar_datos("agenda")
     df_p = cargar_datos("pacientes")
@@ -67,13 +64,16 @@ if st.session_state.menu == "📅 Agenda":
             p_ficha = df_p[df_p['Nombre'] == row['Paciente']].tail(1)
             debe_pago = False
             necesita_renovar = False
+            tag = ""
             
             if not p_ficha.empty:
                 p = p_ficha.iloc[0]
                 debe_pago = float(p.get('Pago', 0)) <= 0
                 if "Plan" in str(row['Servicio']):
                     total = int(p.get('Sesiones_Totales', 0))
-                    asistencias = len(df_a[(df_a['Paciente'] == row['Paciente']) & (df_a['Fecha'].astype(str) >= str(p['Fecha_Inicio']))])
+                    f_pack = str(p.get('Fecha_Inicio', '2000-01-01'))
+                    # Contamos sesiones en agenda para este paciente DESDE la fecha de compra del plan
+                    asistencias = len(df_a[(df_a['Paciente'] == row['Paciente']) & (df_a['Fecha'].astype(str) >= f_pack)])
                     res = total - asistencias
                     tag = f"<span class='sesiones-tag'>{res} rest.</span>"
                     if res <= 1: necesita_renovar = True
@@ -97,7 +97,7 @@ if st.session_state.menu == "📅 Agenda":
                 
                 if necesita_renovar:
                     if c4.button("➕ Renovar", key=f"r_{idx}"):
-                        st.session_state.p_renovando = {"Nombre": row['Paciente'], "DNI": p['DNI'] if not p_ficha.empty else ""}
+                        st.session_state.p_renovando = {"Nombre": row['Paciente'], "DNI": str(p['DNI']) if not p_ficha.empty else ""}
                         st.session_state.menu = "📝 Registro"
                         st.rerun()
 
@@ -105,10 +105,10 @@ if st.session_state.menu == "📅 Agenda":
                 with st.expander("Configurar nueva fecha/hora", expanded=True):
                     ce1, ce2 = st.columns(2)
                     nf = ce1.date_input("Nueva Fecha", value=fecha_sel, key=f"nf_{idx}")
-                    # Solución al ValueError: Verificamos si la hora existe en la lista
-                    hora_val = row['Hora'] if row['Hora'] in HORARIOS else HORARIOS[0]
-                    nh = ce2.selectbox("Nueva Hora", HORARIOS, index=HORARIOS.index(hora_val), key=f"nh_{idx}")
-                    if st.button("Guardar Cambio", key=f"s_{idx}"):
+                    h_val = row['Hora'] if row['Hora'] in HORARIOS else HORARIOS[0]
+                    nh = ce2.selectbox("Nueva Hora", HORARIOS, index=HORARIOS.index(h_val), key=f"nh_{idx}")
+                    if st.button("Confirmar Cambio", key=f"s_{idx}"):
+                        # Buscamos la fila exacta en el DataFrame original usando el índice
                         df_a.loc[idx, 'Fecha'] = str(nf)
                         df_a.loc[idx, 'Hora'] = nh
                         conn.update(worksheet="agenda", data=df_a)
@@ -119,66 +119,96 @@ if st.session_state.menu == "📅 Agenda":
 
 # --- 6. MÓDULO: REGISTRO & RENOVACIÓN ---
 elif st.session_state.menu == "📝 Registro":
-    st.header("Formulario de Ingreso / Renovación")
+    st.header("Ingreso / Renovación de Paciente")
     p_data = st.session_state.p_renovando
     
-    with st.form("f_reg"):
+    with st.form("f_reg_v13"):
         c1, c2 = st.columns(2)
         nom = c1.text_input("Paciente", value=p_data.get("Nombre", ""))
         dni = c2.text_input("DNI", value=p_data.get("DNI", ""))
         orig = c1.selectbox("Origen", ["Socio Gimnasio", "Captación Propia"])
         serv = c2.selectbox("Servicio", list(SERVICIOS_PRECIOS.keys()))
         
-        # Selección de días fijos para planes
-        dias_fijos = st.multiselect("Días fijos (solo para planes)", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"])
-        num_semanas = st.number_input("Cantidad de semanas a agendar", min_value=1, max_value=10, value=1)
+        # Selección de días fijos para agendamiento masivo
+        st.write("📅 **Agendamiento Automático (Planes)**")
+        col_d, col_s = st.columns(2)
+        dias_fijos = col_d.multiselect("Días de la semana", ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"])
+        num_semanas = col_s.number_input("¿Cuántas semanas agendar?", min_value=1, max_value=12, value=1)
         
-        monto = st.number_input("Monto ($)", value=0)
-        f_inicio = st.date_input("Fecha Inicio")
-        h_inicio = st.selectbox("Hora", HORARIOS)
+        # Precio automático
+        precio_ref = SERVICIOS_PRECIOS[serv]
+        monto_sug = precio_ref[orig] if isinstance(precio_ref, dict) else precio_ref
         
-        if st.form_submit_button("Confirmar e Iniciar"):
+        monto = st.number_input("Monto total a cobrar ($)", value=monto_sug)
+        f_inicio = st.date_input("Fecha primer sesión / Inicio Plan")
+        h_inicio = st.selectbox("Hora preferida", HORARIOS)
+        dx = st.text_input("Diagnóstico / Observaciones")
+        
+        if st.form_submit_button("Finalizar y Agendar"):
             df_p = cargar_datos("pacientes")
             cant_s = 10 if "x10" in serv else (5 if "x 5" in serv else 1)
-            new_p = pd.DataFrame([[dni, nom, "", "", orig, serv, monto, str(f_inicio), cant_s]], columns=df_p.columns)
-            conn.update(worksheet="pacientes", data=pd.concat([df_p, new_p], ignore_index=True))
             
-            # Lógica de agendamiento múltiple
+            # 1. Registro en Pacientes (Asegurando columnas exactas)
+            # DNI, Nombre, WhatsApp, DX, Origen, Servicio, Pago, Fecha_Inicio, Sesiones_Totales
+            nueva_fila_p = {
+                "DNI": dni, "Nombre": nom, "WhatsApp": "", "DX": dx,
+                "Origen": orig, "Servicio": serv, "Pago": monto,
+                "Fecha_Inicio": str(f_inicio), "Sesiones_Totales": cant_s
+            }
+            df_p = pd.concat([df_p, pd.DataFrame([nueva_fila_p])], ignore_index=True)
+            conn.update(worksheet="pacientes", data=df_p)
+            
+            # 2. Agendamiento en Agenda
             df_a = cargar_datos("agenda")
             nuevos_turnos = []
             dict_dias = {"Lunes":0, "Martes":1, "Miércoles":2, "Jueves":3, "Viernes":4}
             
             if dias_fijos:
-                for i in range(num_semanas * 7):
-                    dia_iter = f_inicio + timedelta(days=i)
-                    if dia_iter.weekday() in [dict_dias[d] for d in dias_fijos]:
-                        nuevos_turnos.append([str(dia_iter), h_inicio, nom, serv])
+                dias_num = [dict_dias[d] for d in dias_fijos]
+                count = 0
+                curr_date = f_inicio
+                while count < (len(dias_fijos) * num_semanas):
+                    if curr_date.weekday() in dias_num:
+                        nuevos_turnos.append({"Fecha": str(curr_date), "Hora": h_inicio, "Paciente": nom, "Servicio": serv})
+                        count += 1
+                    curr_date += timedelta(days=1)
             else:
-                nuevos_turnos.append([str(f_inicio), h_inicio, nom, serv])
+                nuevos_turnos.append({"Fecha": str(f_inicio), "Hora": h_inicio, "Paciente": nom, "Servicio": serv})
             
-            df_a_new = pd.DataFrame(nuevos_turnos, columns=df_a.columns)
-            conn.update(worksheet="agenda", data=pd.concat([df_a, df_a_new], ignore_index=True))
+            df_a = pd.concat([df_a, pd.DataFrame(nuevos_turnos)], ignore_index=True)
+            conn.update(worksheet="agenda", data=df_a)
             
             st.session_state.p_renovando = {}
-            st.success("Registrado correctamente.")
+            st.success("¡Paciente y turnos registrados!")
             st.rerun()
 
 # --- 7. MÓDULO: FINANZAS ---
 elif st.session_state.menu == "📊 Finanzas":
-    st.header("Panel Financiero")
+    st.header("Panel Financiero Inteligente")
+    
     df_p = cargar_datos("pacientes")
+    df_a = cargar_datos("agenda")
+    
     if not df_p.empty:
-        # Filtrar solo lo cobrado (Pago > 0)
-        df_p['Pago'] = pd.to_numeric(df_p['Pago'], errors='coerce').fillna(0)
-        cobrado = df_p[df_p['Pago'] > 1].copy() # Tomamos montos reales de inscripción
+        # Filtro por Mes
+        df_p['Fecha_DT'] = pd.to_datetime(df_p['Fecha_Inicio'], errors='coerce')
+        meses = df_p['Fecha_DT'].dt.strftime('%Y-%m').unique().tolist()
+        mes_sel = st.selectbox("Seleccionar Mes de Liquidación", sorted(meses, reverse=True))
         
-        cobrado['Comisión'] = cobrado.apply(lambda x: x['Pago'] * 0.3 if x['Origen'] == "Socio Gimnasio" else x['Pago'] * 0.2, axis=1)
-        cobrado['Neto'] = cobrado['Pago'] - cobrado['Comisión']
+        # Procesar cobros del mes seleccionado
+        df_mes = df_p[df_p['Fecha_DT'].dt.strftime('%Y-%m') == mes_sel].copy()
+        df_mes['Pago'] = pd.to_numeric(df_mes['Pago'], errors='coerce').fillna(0)
         
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Bruto (Cobrado)", f"${cobrado['Pago'].sum():,.0f}")
-        c2.metric("Comisiones Total", f"-${cobrado['Comisión'].sum():,.0f}")
-        c3.metric("Neto Elite", f"${cobrado['Neto'].sum():,.0f}")
+        # IMPORTANTE: Solo contamos lo que el paciente YA pagó (Pago > 1)
+        # y lo liquidamos por sesión realizada si es el caso
+        df_mes['Comision'] = df_mes.apply(lambda x: x['Pago'] * 0.3 if x['Origen'] == "Socio Gimnasio" else x['Pago'] * 0.2, axis=1)
+        df_mes['Neto'] = df_mes['Pago'] - df_mes['Comision']
         
-        st.subheader("Detalle de Comisiones por Atención")
-        st.table(cobrado[['Fecha_Inicio', 'Nombre', 'Servicio', 'Pago', 'Comisión', 'Neto']])
+        col1, col2, col3 = st.columns(3)
+        col1.metric(f"Recaudado {mes_sel}", f"${df_mes['Pago'].sum():,.0f}")
+        col2.metric("Total Comisiones", f"-${df_mes['Comision'].sum():,.0f}")
+        col3.metric("Utilidad Neta", f"${df_mes['Neto'].sum():,.0f}")
+        
+        st.subheader("Desglose de Liquidación")
+        # Mostrar solo columnas relevantes y formatear
+        st.dataframe(df_mes[['Fecha_Inicio', 'Nombre', 'Servicio', 'Origen', 'Pago', 'Comision', 'Neto']], use_container_width=True)
