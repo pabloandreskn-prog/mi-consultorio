@@ -2,6 +2,5 @@ streamlit
 pandas
 st-gsheets-connection
 openpyxl
-gspread
-oauth2client
 reportlab
+
